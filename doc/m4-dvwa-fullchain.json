@@ -1,0 +1,55 @@
+{
+  "engine": 7,
+  "kept": 6,
+  "tokens": 16950,
+  "detail": [
+    {
+      "file": "high.php",
+      "rule": "rules.codesentry.php.sqli-concat-query",
+      "verdict": "keep",
+      "confidence": 0.8,
+      "rationale": "证据确认 $id 未经参数化直接拼接进 SQL 查询（DVWA high.php 为已知可注入点，输入经 session-input.php 来自用户），污点可达。",
+      "fix_advice": "使用预编译语句绑定参数（如 $stmt = $sqlite_db_connection->prepare('SELECT first_name, last_name FROM users WHERE user_id = :id LIMIT 1;') 并 bindValue(':id', $id, SQLITE3_INTEGER)），或对 $id 做强类型/白名单校验；若该文件为 DVWA 基准测试夹具，应在扫描策略中标记为预期漏洞而非修复。"
+    },
+    {
+      "file": "low.php",
+      "rule": "rules.codesentry.php.sqli-concat-query",
+      "verdict": "keep",
+      "confidence": 0.9,
+      "rationale": "证据确认 $id 未经参数化直接拼接进 mysqli 查询字符串，该文件为 DVWA low 级别已知从 $_REQUEST 接收 id 的污点源，污点可达，属真实 SQL 注入。",
+      "fix_advice": "改用 mysqli 预处理语句绑定参数（prepare + bind_param('s', $id)），并对输入做类型校验/白名单校验，避免任何字符串拼接进 SQL。"
+    },
+    {
+      "file": "medium.php",
+      "rule": "rules.codesentry.php.sqli-concat-query",
+      "verdict": "keep",
+      "confidence": 0.85,
+      "rationale": "$id 直接内插进 SQL 语句，DVWA medium.php 中 $id 源自 $_POST['id']（仅经 mysqli_real_escape_string，数值型上下文仍可注入），污点可达。",
+      "fix_advice": "使用参数化查询（mysqli_prepare + ? 占位符或 PDO prepared statement）替代字符串拼接；若为整数可强制 (int)$id；另注意该文件位于 DVWA 基准测试目录，属故意漏洞代码，若扫描范围应排除测试夹具可在策略层过滤。"
+    },
+    {
+      "file": "high.php",
+      "rule": "rules.codesentry.php.sqli-concat-query",
+      "verdict": "demote",
+      "confidence": 0.7,
+      "rationale": "污点可达性 uncertain：证据切片仅包含 mysqli_close、case SQLITE 等数据库连接辅助代码，既未展示第35行的查询拼接 sink，也未展示 $_GET 污点源，且 DVWA 的 sqli_blind/high.php 实际采用 PDO 预编译+is_numeric 防护，无法证实拼接注入可达。",
+      "fix_advice": "重新提取 line 25-45 的完整上下文核实是否真有 mysqli_query 字符串拼接；若确有拼接，改用参数化查询（prepare/bindParam 或 mysqli_prepare/bind_param）并对 id 做 intval/is_numeric 强制类型校验。"
+    },
+    {
+      "file": "low.php",
+      "rule": "rules.codesentry.php.sqli-concat-query",
+      "verdict": "keep",
+      "confidence": 0.7,
+      "rationale": "该文件为 DVWA 盲注 low 级别源码，$_GET['id'] 未经处理即拼接进 mysqli_query，污点从 HTTP 输入到查询可达；但提供的证据切片（mysqli_close/case SQLITE 等）未覆盖第 34 行本身，故置信度受限。",
+      "fix_advice": "改用预处理语句（mysqli prepare + bind_param 或 PDO 参数绑定）查询 user_id，并对输入做强制类型转换/白名单校验，杜绝字符串拼接 SQL。"
+    },
+    {
+      "file": "medium.php",
+      "rule": "rules.codesentry.php.sqli-concat-query",
+      "verdict": "keep",
+      "confidence": 0.7,
+      "rationale": "DVWA sqli_blind/medium.php 将 $_POST['id'] 未经充分处理直接拼接进 SQL（无引号包裹，medium 级仅 MySQL 分支做转义、SQLite 分支无处理，转义不足以阻断注入），污点可达；证据切片较薄但命中点为该已知漏洞文件的查询构造处。",
+      "fix_advice": "改用参数化查询/预编译语句（mysqli prepare + bind_param 或 PDO prepare + execute 绑定参数），或在使用前对 $id 做 intval() 强制整型，禁止将用户输入直接拼接进 SQL 字符串。"
+    }
+  ]
+}

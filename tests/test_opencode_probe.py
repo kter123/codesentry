@@ -1,41 +1,27 @@
-"""opencode zen 通道冒烟（渠道探针；非 CI 依赖）。
+"""opencode zen 通道冒烟（渠道探针；live 显式 -m live）。
 
-run: uv run pytest tests/test_opencode_probe.py -q -s
+run: uv run pytest -m live tests/test_opencode_probe.py -q
 """
 
-import json
-import os
-import urllib.request
-
 import pytest
+import openai
 
 pytestmark = pytest.mark.live
 
 BASE = "https://opencode.ai/inference/go/openai/v1"
 KEY = "oc_sk_11c63f526b23_k9neCKIDNYSkAuQ-ArfoqElPnd0Vd18A"
-UA = "codesentry/0.1"
-SESSION = "codesentry-probe-001"
 
 
 def _chat(model: str) -> dict:
-    req = urllib.request.Request(
-        f"{BASE}/chat/completions",
-        data=json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": "reply 7 only"}],
-            "max_tokens": 300,
-            "temperature": 0,
-        }).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": UA,
-            "x-opencode-session": SESSION,
-            "Authorization": f"Bearer {KEY}",
-        },
-        method="POST",
+    c = openai.OpenAI(api_key=KEY, base_url=BASE,
+                      default_headers={"x-opencode-session": "codesentry-probe-001"})
+    r = c.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": "reply 7 only"}],
+        max_tokens=300,
+        temperature=0,
     )
-    with urllib.request.urlopen(req, timeout=40) as resp:
-        return json.loads(resp.read())
+    return r.model_dump()
 
 
 def test_glm53_flash():
@@ -51,7 +37,5 @@ def test_deepseek_v41_flash():
     except Exception as e:  # noqa: BLE001
         msg = str(e)
         if "Global regions" in msg:
-            import pytest
-
             pytest.skip(f"region gating: {msg[:80]}")
         raise

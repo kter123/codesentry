@@ -1,0 +1,45 @@
+{
+  "root": "bench/selfbuilt/php",
+  "files": 4,
+  "tp": 3,
+  "fp": 0,
+  "fn": 0,
+  "recall": 1.0,
+  "detail": {
+    "safe_xss.php": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "vuln_debug.php": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_sqli.php": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_xss.php": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    }
+  },
+  "tokens_used": 1038
+}

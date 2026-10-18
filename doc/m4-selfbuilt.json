@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "tp": 15,
+  "fn": 0,
+  "fp": 0,
+  "recall": 1.0,
+  "vulnerable": 15,
+  "clean": 9
+}

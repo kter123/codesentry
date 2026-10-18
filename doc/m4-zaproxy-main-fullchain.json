@@ -1,0 +1,128 @@
+{
+  "repo": "bench/external/zaproxy-main",
+  "engine": 34,
+  "kept": 15,
+  "tokens": 12705,
+  "detail": [
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-api-scan.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "用户输入拼接进 open() 路径(路径穿越风险)"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-api-scan.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "用户输入拼接进 open() 路径(路径穿越风险)"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-api-scan.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "demote",
+      "confidence": 0.3,
+      "rationale": "证据切片未展示 open() 调用及污点来源，仅见配置生成逻辑，无法确认用户输入可达 open() 路径。",
+      "fix_advice": "若确有 open(user_input)，应使用 os.path.realpath 规范化并校验路径在允许目录内，拒绝包含 '..' 的路径。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-baseline.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "keep",
+      "confidence": 0.6,
+      "rationale": "config_file 来自命令行参数并与 base_dir 拼接后传入 open()，污点可达，但作为本地 CLI 工具实际风险有限。",
+      "fix_advice": "对 config_file 做 os.path.realpath 后校验其仍位于 base_dir 之下，或使用白名单限制可加载的配置文件。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-baseline.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "用户输入拼接进 open() 路径(路径穿越风险)"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-baseline.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "demote",
+      "confidence": 0.6,
+      "rationale": "证据切片未显示污点来源与 open() 的数据流；zap-baseline.py 为本地 CLI 工具，路径通常来自使用者自身命令行参数，路径穿越风险实际可利用性低。",
+      "fix_advice": "若路径确来自外部输入，使用 os.path.realpath 归一化并校验其位于预期目录内，或限制为固定配置目录后再 open()。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-full-scan.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "demote",
+      "confidence": 0.4,
+      "rationale": "config_file 来自命令行参数并拼入 open() 路径，污点可达，但这是用户本机运行的 CLI 扫描脚本，操作者即用户，实际穿越风险低。",
+      "fix_advice": "对 config_file 做 os.path.realpath 后校验其仍位于 base_dir 之下，或使用 argparse 限制为合法文件路径。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-full-scan.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "用户输入拼接进 open() 路径(路径穿越风险)"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap-full-scan.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "demote",
+      "confidence": 0.3,
+      "rationale": "证据切片未展示 open() 调用及污点来源，仅见配置生成逻辑，无法确认用户输入可达该路径拼接。",
+      "fix_advice": "若路径来自命令行参数，使用 os.path.realpath 校验并限制在预期目录内，或用白名单校验文件名后再 open()。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/docker/zap_common.py",
+      "rule": "rules.codesentry.python.path-traversal-open",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "用户输入拼接进 open() 路径(路径穿越风险)"
+    },
+    {
+      "file": "bench/external/zaproxy-main/python/scripts/generic-pytest/test_zap.py",
+      "rule": "rules.codesentry.python.cmd-injection-subprocess",
+      "verdict": "demote",
+      "confidence": 0.7,
+      "rationale": "该文件是测试脚本，读取本地配置文件而非外部用户输入，实际可利用性低。",
+      "fix_advice": "避免 shell=True，改用列表参数形式 subprocess.run([...])，并对配置值做校验。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/zap/src/main/java/org/parosproxy/paros/db/paros/ParosTableHistory.java",
+      "rule": "rules.codesentry.java.sqli-stmt-execute",
+      "verdict": "demote",
+      "confidence": 0.4,
+      "rationale": "证据切片仅显示 createStatement，未展示第 771 行实际拼接的 SQL 及污点来源，无法确认用户可控输入到达 execute。",
+      "fix_advice": "改用 PreparedStatement 并以参数占位符（?）绑定 sessionId 等值，避免字符串拼接 SQL；若拼接部分为内部常量表名/列名，应加白名单校验并注释说明。"
+    },
+    {
+      "file": "bench/external/zaproxy-main/zap/src/main/java/org/parosproxy/paros/db/paros/ParosTableHistory.java",
+      "rule": "rules.codesentry.java.sqli-stmt-execute",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "Statement.execute 拼接 SQL（SQL 注入）"
+    },
+    {
+      "file": "bench/external/zaproxy-main/zap/src/main/java/org/zaproxy/zap/extension/compare/ExtensionCompare.java",
+      "rule": "rules.codesentry.java.path-traversal-concat",
+      "verdict": "keep",
+      "confidence": 0.4,
+      "rationale": "LLM 输出不可解析——按保守未验证保留",
+      "fix_advice": "用户可控输入拼接进路径（Path Traversal 风险——请检查流向是否入 File/Paths/流读取）"
+    },
+    {
+      "file": "bench/external/zaproxy-main/zap/src/main/java/org/zaproxy/zap/utils/ViewState.java",
+      "rule": "rules.codesentry.java.deserial-objectinputstream",
+      "verdict": "demote",
+      "confidence": 0.55,
+      "rationale": "存在 Base64 解码后直接 readObject 的反序列化点，但 ViewState 的 base64 输入来源（是否为攻击者可控的会话数据）证据不足，无法确认污点可达。",
+      "fix_advice": "避免原生 ObjectInputStream 反序列化不可信数据，改用 JSON 等安全格式；若必须保留，使用 ObjectInputFilter 白名单限制可反序列化类，并确保 base64 输入仅来自服务端加密/签名的会话存储。"
+    }
+  ]
+}
