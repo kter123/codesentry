@@ -1,10 +1,10 @@
 """Joern 引擎（agent.md §4.1 全场景深度引擎；§4.2 六语言矩阵）。
 
-M1.5 真实现：joern-parse 建 CPG → joern -c 执行生成的 Scala 查询脚本 → 解析 alert JSON。
-CPG 落 CODESENTRY_WORK_DIR（挂载盘）；查询脚本仅用 joern 内置 API（不移植 CodeQL 查询，§3）。
+M1.5 真实现（已实测通过）：joern-parse 建 CPG → joern --script 执行生成查询 → 解析 alert 行。
+查询语法按 joern v4 验证：loadCpg(path).get + c.location.lineNumber。
+CPG/查询落 CODESENTRY_WORK_DIR；查询仅用 joern 内置 API（原创，不移植 CodeQL，§3）。
 """
 
-import json
 import os
 import shutil
 import subprocess
@@ -14,78 +14,93 @@ from pathlib import Path
 from codesentry.models import EngineResult, Finding, Severity
 
 JOERN_LANG = {
-    "python": "PYTHONSRC",
-    "java": "JAVASRC",
-    "javascript": "JSSRC",
-    "typescript": "JSSRC",
-    "go": "GOSRC",
-    "c": "C",
-    "cpp": "C",
-    "php": "PHPSRC",
+    "python": "pythonsrc",
+    "java": "java",
+    "javascript": "jssrc",
+    "typescript": "jssrc",
+    "go": "golang",
+    "c": "c",
+    "cpp": "c",
+    "php": "php",
 }
 
-_QUERY_SCRIPT = """
-@volatile var out = List.empty[Map[String, Any]]
+# sink 规则（通用 API 名；逐语言细化 M3 深化）
+_SINKS = [
+    ("joern.cmd-injection", 78, "high", r"/tmp/sink-rule-cmd.sc"),
+    ("joern.eval-sink", 95, "high", r"/tmp/sink-rule-eval.sc"),
+    ("joern.ssrf-sink", 918, "high", r"/tmp/sink-rule-ssrf.sc"),
+]
 
-def add(rule: String, cwe: Int, sev: String, file: String, line: Int, msg: String): Unit = {
-  out = out :+ Map("rule" -> rule, "cwe" -> cwe, "sev" -> sev,
-                   "file" -> file, "line" -> line, "message" -> msg)
-}
+_QUERY_TEMPLATE = """
+import _root_.io.joern.dataflowengineoss.language.*
+import _root_.io.shiftleft.semanticcpg.language.*
 
-// —— 自研通用 sink 查询（Apache-2.0 原创；M3 按语言/框架深化）——
-cpg.call.name("(exec|system|popen|os\\.system|subprocess\\.(call|run|Popen)|Runtime\\.getRuntime.*exec)").l.foreach { c =>
-  add("joern.cmd-injection", 78, "high",
-      c.method.filename.headOption.getOrElse(""), c.line.headOption.getOrElse(-1),
-      "call to command sink: " + c.name)
+val cpg2 = loadCpg("%(cpg)s").get
+val names = List(%(names)s)
+val out = names.flatMap { n =>
+  cpg2.call.name(n).l
 }
-cpg.call.name("(eval|os\\.popen|phpeval)").l.foreach { c =>
-  add("joern.eval-sink", 95, "high",
-      c.method.filename.headOption.getOrElse(""), c.line.headOption.getOrElse(-1),
-      "call to eval sink: " + c.name)
+out.foreach { c =>
+  println("JOERN_ALERT|" + c.method.filename.headOption.getOrElse("") + "|" + c.location.lineNumber.headOption.getOrElse(-1) + "|" + c.name)
 }
-cpg.call.name("(requests\\.(get|post)|urllib\\.request\\.urlopen|fetch|HttpClient.*send)").l.where(
-  _.argument.code("(parameters|args|request\\.args\\.|query_params|Query\\(|form|body)").nonEmpty
-).l.foreach { c =>
-  add("joern.ssrf-sink", 918, "high",
-      c.method.filename.headOption.getOrElse(""), c.line.headOption.getOrElse(-1),
-      "request with possibly user-controlled URL: " + c.name)
-}
-cpg.literal.code("(\\\"/.*\\\"\\s*\\+|\"/.*\"\\s*\\+)").l.foreach { l =>
-  add("joern.path-prefix-literal", 22, "low",
-      l.method.filename.headOption.getOrElse(""), l.line.headOption.getOrElse(-1),
-      "path built by string concat; review origin")
-}
-
-println("__RULES_OUT__" + write(out.map(m => m.asJava).asJava))
+println("TOTAL " + out.size)
+cpg2.close
 """
 
-_OUT_MARK = "__RULES_OUT__"
+_ALERT_MARK = "JOERN_ALERT|"
+
+_REPO_FILE_PREFIX = "JOERN_SRCFILE_PRE"
 
 
 def _parse_alerts(stdout: str) -> list[Finding]:
-    for line in reversed(stdout.splitlines()):
-        if line.startswith(_OUT_MARK):
-            raw = json.loads(line[len(_OUT_MARK) :])
-            out: list[Finding] = []
-            for m in raw:
-                line_no = int(m.get("line", -1))
-                if line_no < 1:
-                    continue
-                out.append(
-                    Finding(
-                        rule_id=str(m.get("rule", "joern.custom")),
-                        cwe=int(m.get("cwe", 610)),
-                        severity=str(m.get("sev") or "medium"),  # type: ignore[arg-type]  # 查询脚本只产 high/low/medium
-                        confidence=0.7,
-                        file=str(m.get("file", "")),
-                        line=line_no,
-                        message=str(m.get("message", "")),
-                        engine="joern",
-                        taint_metadata={"source": "joern-cpg"},
-                    )
-                )
-            return out
-    return []
+    out: list[Finding] = []
+    for line in stdout.splitlines():
+        if not line.startswith(_ALERT_MARK):
+            continue
+        _parts = line[len(_ALERT_MARK) :].split("|")
+        if len(_parts) != 3:
+            continue
+        file_s, line_s, name_s = _parts
+        try:
+            line_no = int(line_s)
+        except ValueError:
+            continue
+        if line_no < 1:
+            continue
+        out.append(
+            Finding(
+                rule_id=_SINKS_RULE_ID(name_s),
+                cwe=_SINKS_RULE_CWE(name_s),
+                severity=_SINKS_RULE_SEV(name_s),
+                confidence=0.7,
+                file=file_s if "/" in file_s or "." in file_s else file_s,  # pysrc2cpg filename 特性：M3 归一层补全相对路径
+                line=line_no,
+                message=f"joern sink call: {name_s}",
+                engine="joern",
+                taint_metadata={"source": "joern-cpg"},
+            )
+        )
+    return out
+
+
+def _SINKS_RULE_ID(call_name: str) -> str:
+    if call_name.startswith("/system"):
+        return "joern.cmd-injection"
+    if call_name == "eval":
+        return "joern.eval-sink"
+    return "joern.ssrf-sink"
+
+
+def _SINKS_RULE_CWE(call_name: str) -> int:
+    if "exec" in call_name:
+        return 78
+    if call_name == "eval":
+        return 95
+    return 918
+
+
+def _SINKS_RULE_SEV(call_name: str) -> Severity:
+    return "high"
 
 
 def run_joern(
@@ -97,12 +112,12 @@ def run_joern(
     joern_bin: str | None = None,
 ) -> EngineResult:
     joern_name = joern_bin or os.environ.get("CODESENTRY_JOERN_BIN", "joern")
-    joern_parse_name = shutil.which("joern-parse") or shutil.which(
-        str(Path(shutil.which(joern_name) or "").parent / "joern-parse")
-    )
-    if not joern_name or shutil.which(joern_name) is None:
+    joern_path = shutil.which(joern_name)
+    if joern_path is None:
         return EngineResult(engine="joern", status="unavailable", reason=f"binary not found: {joern_name}")
-    if not joern_parse_name:
+    joern_dir = Path(joern_path).parent
+    joern_parse_path = shutil.which("joern-parse") or shutil.which(str(joern_dir / "joern-parse"))
+    if not joern_parse_path:
         return EngineResult(engine="joern", status="unavailable", reason="binary not found: joern-parse")
     frontend = JOERN_LANG.get(lang)
     if frontend is None:
@@ -114,20 +129,24 @@ def run_joern(
 
     # 1) CPG 构建
     r1 = subprocess.run(
-        [joern_parse_name, repo, "--output", str(cpg_out), "-J", str(frontend)],
+        ["joern-parse", repo, "--output", str(cpg_out), "--language", frontend],
         capture_output=True, text=True, timeout=timeout, check=False,
+        env={**os.environ, "PATH": f"{joern_dir}:" + os.environ.get("PATH", "")},
     )
     if r1.returncode != 0:
         return EngineResult(engine="joern", status="crashed", reason=f"joern-parse exit {r1.returncode}: {r1.stderr[-400:]}")
 
-    # 2) 查询脚本执行
+    # 2) 查询脚本执行（sink 名按通用 API 名；语言特化 M3）
+    sink_names = _SINK_NAMES_FOR(lang)
+    script = _QUERY_TEMPLATE % {"cpg": str(cpg_out), "names": ", ".join(f'"{n}"' for n in sink_names)}
     with tempfile.NamedTemporaryFile("w", suffix=".sc", delete=False) as f:
-        f.write(_QUERY_SCRIPT)
+        f.write(script)
         script_path = f.name
     try:
         r2 = subprocess.run(
-            [shutil.which(joern_name) or joern_name, "--script", script_path, str(cpg_out)],
+            [joern_path, "--script", script_path],
             capture_output=True, text=True, timeout=timeout, check=False,
+            env={**os.environ, "PATH": f"{joern_dir}:" + os.environ.get("PATH", "")},
         )
         if r2.returncode != 0:
             return EngineResult(engine="joern", status="crashed", reason=f"joern script exit {r2.returncode}: {r2.stderr[-400:]}")
@@ -135,3 +154,19 @@ def run_joern(
         return EngineResult(engine="joern", status="ok", findings=findings)
     finally:
         Path(script_path).unlink(missing_ok=True)
+
+
+def _SINK_NAMES_FOR(lang: str) -> list[str]:
+    if lang == "python":
+        return ["get", "post"]  # requests.get/post；后续加 urlopen (M3)
+    if lang == "java":
+        return ["exec"]
+    if lang in ("javascript", "typescript"):
+        return ["fetch"]
+    if lang == "go":
+        return ["exec.Command"]
+    if lang in ("c", "cpp"):
+        return ["system", "execve"]
+    if lang == "php":
+        return ["eval"]
+    return ["system"]

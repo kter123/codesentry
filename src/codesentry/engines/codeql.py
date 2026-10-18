@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from codesentry.models import EngineResult, Finding
@@ -47,7 +46,6 @@ def _parse_sarif(path: Path) -> list[Finding]:
                 m = re.search(r"CWE-(\d+)", str(cwe_raw or ""))
                 cwe = int(m.group(1)) if m else 610
             except Exception:  # noqa: BLE001
-                pass
                 _sev = {"error": "high", "warning": "medium", "note": "low"}.get(
                     res.get("level", "warning"), "medium"
                 )

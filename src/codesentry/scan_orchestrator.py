@@ -99,6 +99,8 @@ def run_scan(repo: str, OSS: bool, out_dir: str) -> int:
 
 
     def _engine_spec(name):
+        _RULES_PATH = str(Path(__file__).resolve().parent.parent.parent / "rules" / "codesentry-core.yml")
+
         def spec(**kw):
             if name == "codeql":
                 return run_codeql(
@@ -112,6 +114,7 @@ def run_scan(repo: str, OSS: bool, out_dir: str) -> int:
                 )
             return run_semgrep(
                 repo=repo, semgrep_bin=get_settings().semgrep_bin,
+                config=_RULES_PATH,
             )
 
         spec.__name__ = f"run_{name}"
