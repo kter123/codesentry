@@ -1,0 +1,7 @@
+{
+  "language": "go",
+  "cwe": 78,
+  "sink_file": "main.go",
+  "sink_line": 11,
+  "description": "CWE-78 命令注入：HTTP 参数直接作为 exec.Command 参数"
+}

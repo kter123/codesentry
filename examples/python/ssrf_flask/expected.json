@@ -1,0 +1,7 @@
+{
+  "language": "python",
+  "cwe": 918,
+  "sink_file": "app.py",
+  "sink_line": 10,
+  "description": "CWE-918 SSRF：Flask 路由参数直接作为目标 URL 发起请求"
+}

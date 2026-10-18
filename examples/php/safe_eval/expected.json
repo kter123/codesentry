@@ -1,0 +1,7 @@
+{
+  "language": "php",
+  "cwe": 200,
+  "sink_file": "bootstrap.php",
+  "sink_line": 5,
+  "description": "CWE-200 信息泄漏：display_errors 直接开给生产用户"
+}

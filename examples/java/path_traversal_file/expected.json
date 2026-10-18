@@ -1,0 +1,7 @@
+{
+  "language": "java",
+  "cwe": 22,
+  "sink_file": "FileService.java",
+  "sink_line": 9,
+  "description": "CWE-22 路径穿越：用户输入拼进文件路径直接读取"
+}

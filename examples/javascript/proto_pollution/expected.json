@@ -1,0 +1,7 @@
+{
+  "language": "javascript",
+  "cwe": 1321,
+  "sink_file": "gadget.js",
+  "sink_line": 4,
+  "description": "CWE-1321 原型污染：递归合并无键过滤，__proto__ 可注入"
+}

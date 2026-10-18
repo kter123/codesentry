@@ -1,0 +1,59 @@
+rules:
+  - id: codesentry.python.ssrf-request-user-input
+    message: 用户可控输入直接作为 URL 发起请求（SSRF）
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+    pattern-either:
+      - pattern: requests.get($U, ...)
+      - pattern: requests.post($U, ...)
+      - pattern: urllib.request.urlopen($U, ...)
+
+  - id: codesentry.java.path-traversal-file-read
+    message: 用户输入拼接进文件路径直接读取（Path Traversal）
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+    pattern-either:
+      - pattern: new File($BASE + $INPUT)
+      - pattern: new File($P)
+      - pattern: Paths.get($BASE + $INPUT)
+
+  - id: codesentry.js.proto-pollution-merge
+    message: 递归合并无键过滤——原型污染风险
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-1321: Improperly Controlled Modification of Object Prototype Attributes"
+    pattern: |
+      function $F($TARGET, $SRC) { ... }
+
+  - id: codesentry.go.command-injection-exec
+    message: 用户输入直接作为 exec.Command 参数（命令注入）
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+    pattern-either:
+      - pattern: exec.Command($CMD, ..., (string($INPUT)), ...)
+      - pattern: exec.Command($CMD, ..., $INPUT, ...)
+
+  - id: codesentry.c.format-string-printf
+    message: 用户输入直接作为 printf 格式串（Format String）
+    severity: ERROR
+    languages: [c]
+    metadata:
+      cwe: "CWE-134: Use of Externally-Controlled Format String"
+    pattern: |
+      printf($FMT, ...)
+
+  - id: codesentry.php.display-errors-enabled
+    message: 生产配置 display_errors=1（信息泄漏）
+    severity: WARNING
+    languages: [php]
+    metadata:
+      cwe: "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    pattern: |
+      ini_set('display_errors', $V)

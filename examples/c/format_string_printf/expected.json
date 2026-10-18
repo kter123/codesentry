@@ -1,0 +1,7 @@
+{
+  "language": "c",
+  "cwe": 134,
+  "sink_file": "main.c",
+  "sink_line": 6,
+  "description": "CWE-134 格式化字符串：argv 直接作 printf 格式串"
+}
