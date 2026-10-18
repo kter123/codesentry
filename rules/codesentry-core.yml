@@ -1,4 +1,5 @@
 rules:
+  # ---- Python ----
   - id: codesentry.python.ssrf-request-user-input
     message: 用户可控输入直接作为 URL 发起请求（SSRF）
     severity: ERROR
@@ -10,6 +11,52 @@ rules:
       - pattern: requests.post($U, ...)
       - pattern: urllib.request.urlopen($U, ...)
 
+  - id: codesentry.python.sqli-format
+    message: f-string/format 拼接 SQL（SQL 注入）
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+    pattern-either:
+      - pattern: $C.execute(f"...{$X}...")
+      - pattern: $C.execute("..." % $X)
+      - pattern: $C.execute("...".format(...))
+
+  - id: codesentry.python.cmd-injection-subprocess
+    message: 用户输入经 shell=True 进入 subprocess（命令注入）
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+    pattern-either:
+      - pattern: subprocess.run($X, shell=True, ...)
+      - pattern: subprocess.call($X, shell=True, ...)
+      - pattern: subprocess.Popen($X, shell=True, ...)
+      - pattern: os.system($X)
+
+  - id: codesentry.python.path-traversal-open
+    message: 用户输入拼接进 open() 路径(路径穿越风险)
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+    pattern-either:
+      - patterns:
+          - pattern: open($P, ...)
+          - pattern-not: open("...", ...)
+          - pattern-not: open(LIT, ...)
+
+  - id: codesentry.python.deserial-pickle-loads
+    message: 反序列化不可信数据(pickle)
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    pattern-either:
+      - pattern: pickle.loads($X)
+      - pattern: yaml.load($X, ...)
+
+  # ---- Java ----
   - id: codesentry.java.path-traversal-concat
     message: 用户可控输入拼接进路径（Path Traversal 风险——请检查流向是否入 File/Paths/流读取）
     severity: WARNING
@@ -22,6 +69,56 @@ rules:
           metavariable: $LIT
           regex: ^".*/.*"$
 
+  - id: codesentry.java.sqli-stmt-execute
+    message: Statement.execute 拼接 SQL（SQL 注入）
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+    pattern-either:
+      - pattern: $S.executeQuery($Q)
+      - pattern: $S.executeUpdate($Q)
+      - pattern: $S.execute($Q)
+    pattern-not: $S.executeQuery("$LIT")
+    metavariable-pattern:
+      metavariable: $Q
+      pattern: |
+        (String $S2)
+
+  - id: codesentry.java.cmd-injection-runtime
+    message: 拼接命令进 Runtime.exec（命令注入）
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+    pattern-either:
+      - patterns:
+          - pattern: Runtime.getRuntime().exec($CMD)
+          - pattern-not: Runtime.getRuntime().exec($ARR)
+      - patterns:
+          - pattern: Runtime.getRuntime().exec("$PRE" + $X)
+
+  - id: codesentry.java.deserial-objectinputstream
+    message: 直接 readObject 反序列化不可信流
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+    pattern: $O.readObject()
+
+  - id: codesentry.java.xss-out-println
+    message: 请求参数直接写响应（XSS）
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation"
+    patterns:
+      - pattern: $OUT.println($X)
+      - metavariable-regex:
+          metavariable: $OUT
+          regex: .*(PrintWriter|Writer|resp.*writer).*
+
+  # ---- JS/TS ----
   - id: codesentry.js.proto-pollution-merge
     message: 递归合并无键过滤——原型污染风险
     severity: WARNING
@@ -29,30 +126,88 @@ rules:
     metadata:
       cwe: "CWE-1321: Improperly Controlled Modification of Object Prototype Attributes"
     pattern-either:
-      - pattern: |
-          for (const $K of Object.keys($SRC)) { ... }
-      - pattern: |
-          for (const $K in $SRC) { ... }
+      - patterns:
+          - pattern: |
+              for (const $K of Object.keys($SRC)) { ... }
+          - pattern-not: |
+              for (const $K of Object.keys($SRC)) { if (...) continue; ... }
+      - pattern-regex: for\s*\(\s*(?:const|let|var)\s+\w+\s+in\s+
 
+  - id: codesentry.js.sqli-string-concat-query
+    message: 字符串拼接进 SQL 查询(SQL 注入)
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+    pattern: $DB.query($Q)
+    metavariable-pattern:
+      metavariable: $Q
+      pattern: |
+        (String $S)
+
+  # ---- Go ----
   - id: codesentry.go.command-injection-exec
     message: 用户输入直接作为 exec.Command 参数（命令注入）
     severity: ERROR
     languages: [go]
     metadata:
       cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
-    pattern-either:
-      - pattern: exec.Command($CMD, ..., (string($INPUT)), ...)
-      - pattern: exec.Command($CMD, ..., $INPUT, ...)
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command($CMD, ..., $INPUT, ...)
+          - pattern: exec.Command($CMD, $IN)
+      - metavariable-regex:
+          metavariable: $INPUT
+          regex: ^(?!")[a-zA-Z_][A-Za-z0-9_]*$
 
+  - id: codesentry.go.sqli-sprintf-query
+    message: fmt.Sprintf 拼 SQL 进查询（SQL 注入）
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+    patterns:
+      - pattern: $DB.Query(fmt.Sprintf($F, $X), ...)
+      - metavariable-regex:
+          metavariable: $F
+          regex: ".*%.*"
+
+  - id: codesentry.go.path-traversal-fopen
+    message: 用户输入直接作为文件路径打开（路径穿越）
+    severity: WARNING
+    languages: [go]
+    metadata:
+      cwe: "CWE-22: Path Traversal"
+    pattern: os.Open($P, ...)
+
+  # ---- C ----
   - id: codesentry.c.format-string-printf
     message: 用户输入直接作为 printf 格式串（Format String）
     severity: ERROR
     languages: [c]
     metadata:
       cwe: "CWE-134: Use of Externally-Controlled Format String"
-    pattern: |
-      printf($FMT, ...)
+    patterns:
+      - pattern: printf($FMT)
+      - pattern-not: printf("...")
 
+  - id: codesentry.c.sprintf-overflow
+    message: 无边界 sprintf(char buf, ...)（缓冲区溢出风险）
+    severity: WARNING
+    languages: [c]
+    metadata:
+      cwe: "CWE-120: Buffer Copy without Checking Size of Input"
+    pattern: sprintf($BUF, $FMT, $X)
+
+  - id: codesentry.c.strcpy-overflow
+    message: 直接 strcpy 无长度检查（缓冲区溢出）
+    severity: ERROR
+    languages: [c]
+    metadata:
+      cwe: "CWE-120: Buffer Overflow"
+    pattern: strcpy($DST, $SRC)
+
+  # ---- PHP ----
   - id: codesentry.php.display-errors-enabled
     message: 生产配置 display_errors=1（信息泄漏）
     severity: WARNING
@@ -61,3 +216,27 @@ rules:
       cwe: "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
     pattern: |
       ini_set('display_errors', $V)
+
+  - id: codesentry.php.sqli-concat-query
+    message: 字符串拼接进 mysqli 查询（SQL 注入）
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+    pattern: $CONN->query($Q)
+    metavariable-pattern:
+      metavariable: $Q
+      pattern: |
+        ($X . $Y)
+
+  - id: codesentry.php.xss-echo-get
+    message: echo 直接输 $_GET（XSS）
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-79: XSS"
+    patterns:
+      - pattern: echo($V);
+      - metavariable-regex:
+          metavariable: $V
+          regex: \$_(GET|POST|REQUEST)
