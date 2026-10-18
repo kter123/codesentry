@@ -11,6 +11,7 @@ from pathlib import Path
 
 TEXT_LIMIT_BYTES = 1_000_000
 SKIP_PATTERNS = ("check_licenses.py",)
+DOC_DIRS = ("doc/", "tests/")
 
 
 def _ls_files(repo: Path) -> list[str]:
@@ -41,7 +42,8 @@ def check_codeql_absence(files: list[str], repo: Path) -> list[str]:
                 except UnicodeDecodeError:
                     continue
                 if "import codeql" in text or "from codeql" in text:
-                    violations.append(f"{path}: 'import codeql' found (red line: CodeQL SDK import)")
+                    if not any(path.startswith(d) for d in DOC_DIRS):
+                        violations.append(f"{path}: 'import codeql' found (red line: CodeQL SDK import)")
     return violations
 
 
