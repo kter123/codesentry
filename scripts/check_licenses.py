@@ -23,33 +23,45 @@ def _ls_files(repo: Path) -> list[str]:
     return [line for line in r.stdout.splitlines() if line.strip()]
 
 
+# CodeQL 检测/解析适配器（fr-3 gate + SARIF 解析，agent.md 明确允许「仅探测用户自装二进制」）
+CODEQL_ADAPTER_ALLOW = ("src/codesentry/engines/codeql.py", "tests/", "doc/", "rules/")
+
+
 def check_codeql_absence(files: list[str], repo: Path) -> list[str]:
     violations = []
     for path in files:
         name = path.rsplit("/", 1)[-1]
-        for pat in ("*.ql", "*.qll", "codeql*"):
-            if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(path.lower(), f"*/{pat}"):
-                violations.append(
-                    f"{path}: CodeQL artifact found (red line: no CodeQL in distribution)"
-                )
-                break
-        else:
-            full = repo / path
+        matched = next(
+            (
+                pat
+                for pat in ("*.ql", "*.qll", "codeql*")
+                if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(path.lower(), f"*/{pat}")
+            ),
+            None,
+        )
+        if matched and not any(path.startswith(p.rstrip("/")) for p in CODEQL_ADAPTER_ALLOW):
+            violations.append(
+                f"{path}: CodeQL artifact found (red line: no CodeQL in distribution)"
+            )
+            continue
+        full = repo / path
+        if matched and any(path.startswith(p.rstrip("/")) for p in CODEQL_ADAPTER_ALLOW):
+            full = repo / path  # 适配器文件仍走文本扫描（内容须无 SDK import）
+        try:
+            data = full.read_bytes()
+        except OSError:
+            continue
+        if len(data) < TEXT_LIMIT_BYTES:
             try:
-                data = full.read_bytes()
-            except OSError:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
                 continue
-            if len(data) < TEXT_LIMIT_BYTES:
-                try:
-                    text = data.decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-                if ("import codeql" in text or "from codeql" in text) and not any(
-                    path.startswith(d) for d in DOC_DIRS
-                ):
-                    violations.append(
-                        f"{path}: 'import codeql' found (red line: CodeQL SDK import)"
-                    )
+            if ("import codeql" in text or "from codeql" in text) and not any(
+                path.startswith(d) for d in DOC_DIRS
+            ):
+                violations.append(
+                    f"{path}: 'import codeql' found (red line: CodeQL SDK import)"
+                )
     return violations
 
 
