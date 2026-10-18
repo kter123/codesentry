@@ -1,11 +1,9 @@
 """graph 组装单测（checkpointer mock / 真 connector 在集成测试）+ LLM mock 端到端。"""
 
-import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
-from codesentry.agents.retrieval import run_retrieval
 from codesentry.agents.report import run_report
-from codesentry.agents.scan import run_scan_agent
+from codesentry.agents.retrieval import run_retrieval
 from codesentry.agents.state import new_state
 from codesentry.orchestrator.graph import build_graph, route_after_triage
 

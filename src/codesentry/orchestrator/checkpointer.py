@@ -1,6 +1,5 @@
 """PostgresSaver checkpoint（§7.3；langgraph schema）。"""
 
-import os
 from contextlib import contextmanager
 from functools import lru_cache
 

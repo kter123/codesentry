@@ -1,4 +1,3 @@
-import pytest
 
 from codesentry.agents.poc_gen import check_payload_safety, execute_poc_local, gen_poc, run_poc_gen
 from codesentry.agents.state import new_state

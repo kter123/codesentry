@@ -96,7 +96,7 @@ def run_poc_gen(state: dict, llm=None) -> dict:
         if mode == "off":
             poc_results[key] = {
                 "exploit_chain": [], "poc_file": "", "verdict": "plausible",
-                "execution_log": f"POC_RUN=off — 只生成不执行（D28）",
+                "execution_log": "POC_RUN=off — 只生成不执行（D28）",
             }
             updated.append({**t, "poc": poc_results[key]})
             continue
