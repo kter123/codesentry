@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-from typing import Any
 
 from codesentry.db.pool import get_conn
 from codesentry.rag.chunker import Chunk
@@ -21,7 +20,7 @@ def upsert_code_chunks(project: str, chunks: list[Chunk], embeddings: list[list[
             h = sha256(c.content)
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT 1 FROM code_chunks WHERE content_sha256 = %s AND project = %s",
+                    "SELECT 1 FROM code_chunks WHERE content_sha256 = %s AND project = %s",
                     (h, project),
                 )
                 if cur.fetchone():

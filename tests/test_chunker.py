@@ -1,6 +1,6 @@
 import pytest
 
-from codesentry.rag.chunker import Chunk, chunk_code
+from codesentry.rag.chunker import chunk_code
 
 PYTHON_SRC = '''\
 def sink_call(url):

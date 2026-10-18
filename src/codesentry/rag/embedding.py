@@ -8,13 +8,8 @@
 """
 
 import os
-from typing import Protocol
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-class _EmbeddingsApi(Protocol):
-    def create(self, *, model: str, input, **kw): ...
 
 
 class EmbeddingClient:

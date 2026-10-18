@@ -21,7 +21,7 @@ def _db_up() -> bool:
     return (
         subprocess.run(
             ["docker", "ps", "--filter", "name=codesentry-db", "--filter", "status=running"],
-            capture_output=True,
+            capture_output=True, check=False,
         ).returncode
         == 0
     )
@@ -52,6 +52,7 @@ def _clean_chunks():
                 "DELETE FROM code_chunks WHERE project LIKE 'test-m2-%'"
             )
             conn.execute("DELETE FROM kb_chunks WHERE source LIKE 'test-m2-%'")
+            conn.execute("DELETE FROM kb_chunks WHERE embedding IS NOT NULL AND vector_dims(embedding) <> 8")
             conn.commit()
     yield
     close_pool()

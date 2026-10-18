@@ -9,22 +9,31 @@ runner = CliRunner()
 
 
 @pytest.fixture()
-def _db():
+def _db(monkeypatch):
     import subprocess
 
     if subprocess.run(
         ["docker", "ps", "--filter", "name=codesentry-db", "--filter", "status=running"],
-        capture_output=True,
+        capture_output=True, check=False,
     ).returncode != 0:
         pytest.skip("codesentry-db not running")
     os.environ.setdefault(
         "CODESENTRY_DATABASE_URL", "postgresql://codesentry:devtest@127.0.0.1:5432/codesentry"
+    )
+
+    class _FakeClient:
+        def embed(self, texts):
+            return [[0.0] * 8 for _ in texts]
+
+    monkeypatch.setattr(
+        "codesentry.rag.embedding.EmbeddingClient", type("FC", (), {"from_config": staticmethod(lambda: _FakeClient())})
     )
     from codesentry.db.ddl import render_full_ddl
     from codesentry.db.pool import get_conn
 
     with get_conn() as conn:
         conn.execute(render_full_ddl())
+        conn.execute("DELETE FROM kb_chunks WHERE embedding IS NOT NULL AND vector_dims(embedding) = 8")
         conn.commit()
     yield
     from codesentry.db.pool import close_pool

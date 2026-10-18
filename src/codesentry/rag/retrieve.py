@@ -19,8 +19,7 @@ def hybrid_search(
     table = _COLLECTION_TO_TABLE[collection]
     assert table in _COLLECTION_TO_TABLE.values()
     vec_literal = "[" + ",".join(f"{x:.8f}" for x in query_vec) + "]"
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT

@@ -1,6 +1,5 @@
 """kb 目录导入（agent.md FR-5：CWE/OWASP + 用户自有规范；内容全部入库 kb_chunks）。"""
 
-import json
 from pathlib import Path
 
 from codesentry.db import repo as db_repo
@@ -8,11 +7,11 @@ from codesentry.db import repo as db_repo
 SUPPORTED_EXTS = {".md", ".txt", ".json"}
 
 
-def import_kb_dir(root: str, *, embed: bool = False) -> int:
-    """导入目录下全部 md/txt/json 文本为 kb_chunks。
+def import_kb_dir(root: str) -> int:
+    """导入目录下全部 md/txt/json 文本为 kb_chunks（EmbeddingClient.from_config() 出向量）。
 
-    embed=False 时只占位向量空（M2 允许无向量检索纯全文；embedding 由调用方批量补）。
-    阻塞红线：对本目录内容不限制来源——kb 内容由用户提供（agent.md §3）。
+    调用方需先配置 embedding 通道（本地 bge-m3 或远程兼容接口，D10）。
+    幂等：同 content_sha256 跳过。
     """
     items: list[dict] = []
     src = Path(root)
@@ -27,14 +26,14 @@ def import_kb_dir(root: str, *, embed: bool = False) -> int:
         items.append({"source": str(p), "title": p.stem, "content": content, "lang": "zh"})
     if not items:
         return 0
-    embeddings = [[0.0] for _ in items] if not embed else None
-    if embeddings is None:
-        from codesentry.rag.embedding import EmbeddingClient
+    from codesentry.rag.embedding import EmbeddingClient
 
-        client = EmbeddingClient.from_config()
-        embeddings = client.embed([it["content"][:8000] for it in items])
+    client = EmbeddingClient.from_config()
+    embeddings = client.embed([it["content"][:8000] for it in items])
     return db_repo.upsert_kb_chunks(items, embeddings)
 
 
 def kb_fixture_to_items(fixture: Path) -> list[dict]:
+    import json
+
     return json.loads(fixture.read_text())

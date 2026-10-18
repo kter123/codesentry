@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 
-import psycopg
 from psycopg_pool import ConnectionPool
 
 _pool: ConnectionPool | None = None

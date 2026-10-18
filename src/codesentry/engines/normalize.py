@@ -23,7 +23,7 @@ def normalize_semgrep(doc: dict) -> list[Finding]:
     out: list[Finding] = []
     for r in doc.get("results", []):
         extra = r.get("extra", {})
-        raw_sev = str((extra.get("severity") or "")).upper()
+        raw_sev = str(extra.get("severity") or "").upper()
         cwe_meta = (extra.get("metadata") or {}).get("cwe") or ""
         sev = _SEMGREP_SEV.get(raw_sev, "low")
         out.append(
