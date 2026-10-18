@@ -12,6 +12,7 @@ dependencies = [
     "psycopg-pool>=3.3.3",
     "tree-sitter>=0.26.0",
     "tree-sitter-python>=0.25.0",
+    "openai>=3.35.1",
 ]
 
 [project.scripts]
