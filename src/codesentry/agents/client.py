@@ -19,7 +19,7 @@ def agents_list() -> None:
             cur.execute("SELECT name, enabled, model_role FROM agent_configs")
             for row in cur.fetchall():
                 configs[row[0]] = {"enabled": row[1], "model_role": row[2]}
-    except Exception:  # noqa: BLE001 - 无库展示种子清单
+    except Exception:  # noqa: BLE001, S110 - 无库展示种子清单
         pass
 
     table = Table(title="CodeSentry Agents")

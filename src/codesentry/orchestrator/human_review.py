@@ -22,7 +22,7 @@ def human_review_node(state: dict) -> dict:
 
     # decisions: list[{rule_id, line, verdict: approve|reject|adjust, confidence}]
     if isinstance(decisions, Command) and hasattr(decisions, "resume"):
-        decisions = decisions.resume
+        decisions = getattr(decisions, "resume", decisions)
     if not decisions:
         return {"phase": "report"}
 
@@ -34,9 +34,8 @@ def human_review_node(state: dict) -> dict:
         key = f"{d.get('rule_id')}@{d.get('line')}"
         if d.get("verdict") == "reject":
             rejected_keys.add(key)
-        elif d.get("verdict") in ("approve", "adjust"):
-            if d.get("confidence") is not None:
-                adjusted[key] = float(d["confidence"])
+        elif d.get("verdict") in ("approve", "adjust") and d.get("confidence") is not None:
+            adjusted[key] = float(d["confidence"])
 
     triaged = []
     for t in state.get("triaged_findings") or []:
