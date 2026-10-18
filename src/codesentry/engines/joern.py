@@ -73,7 +73,7 @@ def _parse_alerts(stdout: str) -> list[Finding]:
                 cwe=_SINKS_RULE_CWE(name_s),
                 severity=_SINKS_RULE_SEV(name_s),
                 confidence=0.7,
-                file=file_s if "/" in file_s or "." in file_s else file_s,  # pysrc2cpg filename 特性：M3 归一层补全相对路径
+                file=file_s,
                 line=line_no,
                 message=f"joern sink call: {name_s}",
                 engine="joern",
