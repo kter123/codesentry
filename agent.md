@@ -2,7 +2,7 @@
 
 > **本文件是 codesentry 项目的唯一需求与架构来源（SSOT）**。所有后续执行（脚手架、里程碑、代码评审）以本文件为准；修改需求先改本文件。
 >
-> - 状态：**v1.0（2026-10-18）**——全部决策已与需求方逐项确认（见 §12 决策记录 D1–D16），待需求方对全文做最终批准
+> - 状态：**v1.1（2026-10-18）**——全部决策已与需求方逐项确认（见 §12 决策记录 D1–D22），待需求方对全文做最终批准
 > - 位置：按需求方要求保存于仓库根目录 `agent.md`
 
 ---
@@ -12,13 +12,14 @@
 **CodeSentry** 是基于 LLM 多智能体的代码安全审计平台：对目标仓库自动完成「三引擎静态扫描 → 数据流深挖 → RAG 上下文检索 → AI 验证降噪 → 中文审计报告」的端到端流程。
 
 - **目标用户**：安全工程师、研发团队（本地 / 内网部署）
-- **交付形态（已确认）**：v1 = **CLI（含增量审计）+ 基础 WebUI（M5）**；v2 扩展完整 WebUI
+- **交付形态（已确认）**：v1 = **CLI（含增量审计）+ WebUI（M5，含 agent 管理控制台）**；v2 扩展完整 WebUI
 - **核心差异化**：中心化多 agent 编排（LangGraph）+ 三引擎许可分流 + 引擎结果与 LLM 验证联动，输出带完整证据链（污点源 → 传播路径 → 汇聚点）的低误报报告
 - **成功标准（v1 验收）**：
   1. 六种语言各有至少一个样例漏洞仓库，`codesentry scan` 端到端跑通，产出 SARIF 2.1.0 + Markdown 双格式报告
   2. 报告中每条 finding 均附可复核证据（文件行号、调用链、引擎与 LLM 各自结论）
   3. 经 TriageAgent 过滤后误报显著下降（目标：原始 finding 数下降 ≥ 50%，已确认漏洞零漏报——按 M4 基线回测）
   4. 单仓扫描受预算硬约束（≤ $10 / ≤ 50 万 token / ≤ 500 次工具调用，超限熔断并降级输出）
+  5. WebUI 可查看每次运行的 agent 拓扑与节点时间线，可完成人工复核与 Prompt 版本管理（M5 验收项）
 
 ## 2. 基础要求
 
@@ -32,22 +33,23 @@
 | FR-4 | AI 审计流水线 | 中心化多 agent 对引擎结果做验证、链路补全、置信度评级、去重合并 |
 | FR-5 | RAG 检索 | AST 函数/类粒度切块入库（pgvector）+ 安全知识库（CWE/OWASP 公共资料 + 用户自有规范），向量 + 全文混合检索与引用 |
 | FR-6 | 审计报告 | 中文 Markdown + SARIF 2.1.0 导出；含严重度、置信度、证据链、修复建议 |
-| FR-7 | 预算与可观测 | token/成本/调用次数硬预算；全程落库可回放（LangGraph checkpoint） |
+| FR-7 | 预算与可观测 | token/成本/调用次数硬预算；节点级遥测（起止/耗时/token/工具调用/状态）直写 PostgreSQL 台账；全程落库可回放（LangGraph checkpoint） |
 | FR-8 | 规则自管理 | 平台作为**可分发展品不内置任何第三方规则包**；提供规则配置机制（路径/目录/自研规则），随包附少量原创规则（Apache-2.0） |
-| FR-9 | 人工复核开关 | `CODESENTRY_HUMAN_REVIEW=true` 时（默认关）报告发布前中断等待人工确认（LangGraph interrupt） |
-| FR-10 | 增量审计（已提入 v1） | `codesentry diff <base>...<head>`：基于本地 git diff 只审计变更代码及其可达链路；CLI 可直接嵌入 CI/CD 流水线（退出码 + SARIF 产物）；基础 WebUI 提供增量结果查看（M5） |
+| FR-9 | 人工复核（已确认入口） | `CODESENTRY_HUMAN_REVIEW=true` 时（默认关）流水线在 report 前 interrupt；复核入口为 **WebUI 待复核队列**：逐条查看证据链，通过/驳回/调整置信度，确认后流水线恢复出报（CLI 触发的扫描同样进队列） |
+| FR-10 | 增量审计（已提入 v1） | `codesentry diff <base>...<head>`：基于本地 git diff 只审计变更代码及其可达链路；CLI 可直接嵌入 CI/CD 流水线（退出码 + SARIF 产物）；WebUI 提供增量结果查看（M5） |
+| FR-11 | WebUI Agent 管理（已确认：全量） | WebUI 提供 agent 管理控制台：① 监控——agent 清单、健康状态、每次运行的节点时间线与拓扑图、token/成本/预算消耗；② 运行时配置——按 agent 调整模型分配（fast/deep）、启停、预算覆写；③ Prompt 管理——在线编辑、版本化入库、历史对比与回滚。扫描记录所用 Prompt 版本号（支撑 NFR-2 可复现） |
 
 ### 2.2 非功能需求
 
 - **NFR-1 语言支持（已确认）**：v1 覆盖 **Python、Java、JS/TS、Go、C/C++、PHP** 六门；各引擎覆盖度见 §4.2，弱组合在 M1 实测并标注降级策略
-- **NFR-2 可复现**：同一仓库 + 同配置下路由路径可复现（LLM 温度默认 0，已确认）
+- **NFR-2 可复现**：同一仓库 + 同配置下路由路径可复现（LLM 温度默认 0，已确认）；复现要素含 Prompt 版本号 + agent 配置快照（随扫描落库）
 - **NFR-3 数据本地化**：代码、向量、结果全部存本地 PostgreSQL（Docker 挂载盘）；代码不外发，仅 LLM 请求按需携带必要片段
 - **NFR-4 部署**：`docker compose` 一键起数据库；应用可裸跑（Python venv）或容器化；Joern 需 JDK 17+
 - **NFR-5 合规**：依赖引入前做许可证检查（脚本进 CI），红线见 §3
 
 ### 2.3 范围外（v1 不做，已确认）
 
-SCA 依赖漏洞、容器/IaC 扫描、DAST、多租户 SaaS、IDE 插件、自动修复补丁（均为 v2+ 候选）。~~PR 增量审计~~ 已提入 v1（FR-10）。
+SCA 依赖漏洞、容器/IaC 扫描、DAST、多租户 SaaS、IDE 插件、自动修复补丁、WebUI 多用户认证体系（v1 面向本地/内网单人使用，见 §11 风险；认证授权为 v2 首批候选）。~~PR 增量审计~~ 已提入 v1（FR-10）。
 
 ## 3. 许可证合规（红线）
 
@@ -62,6 +64,7 @@ SCA 依赖漏洞、容器/IaC 扫描、DAST、多租户 SaaS、IDE 插件、自�
 | semgrep/semgrep-rules 官方规则库 | Semgrep Rules License v1.0 | **不打包、不内置**（许可仅允许内部业务使用，禁止用于竞争产品/SaaS）。用户自行下载并经规则配置机制加载 |
 | 第三方规则（如 Trail of Bits 规则集 AGPL-3.0） | 各自许可 | 同上：用户自备，平台只提供加载通道 |
 | bge-m3（Embedding 模型） | MIT | 用户本地部署，模型文件落挂载盘（D10） |
+| React / Ant Design / FastAPI | MIT / MIT / BSD 等宽松协议 | WebUI 技术栈（D16），分发合规 |
 | vulnhuntr | AGPL-3.0 | **仅借鉴思路**（迭代上下文扩展、两段式分析、置信度评分），不复制任何代码 |
 | CodeSentry 自身 | **Apache-2.0（已确认）** | 自研查询/规则/代码均为原创；不移植 CodeQL 查询逻辑 |
 
@@ -101,14 +104,14 @@ M1 交付物：每个「语言 × 引擎」组合至少 1 个可运行验证样�
 | **RepoAgent**（OpenBMB） | Apache-2.0 | AST 驱动的层级化代码理解：函数/类粒度切块、调用关系图——用于 RAG 切块策略 | 同协议可参考复用，保留声明 |
 | **Atlantis / Team-Atlanta**（AIxCC 冠军系） | 多数组件 Apache-2.0 / MIT | 「检测 → 验证 → 修复 → 回归」闭环思想、多专家模块协作形态 | v1 只借鉴检测-验证闭环；修复生成为 v2+ |
 
-**相对上述项目的升级点**：中心化编排 + 统一预算熔断；三引擎许可分流（现有项目均无此问题域）；引擎 finding 与 RAG 证据双通道融合 triage；checkpointer 全程可回放。
+**相对上述项目的升级点**：中心化编排 + 统一预算熔断；三引擎许可分流（现有项目均无此问题域）；引擎 finding 与 RAG 证据双通道融合 triage；checkpointer 全程可回放；**agent 全量管理控制台（含 Prompt 版本化，现有开源同类均缺）**。
 
 ## 6. 总体架构（第三步：中心化多 agent 设计）
 
 ```mermaid
 flowchart TD
     CLI[CLI 层 Typer<br/>init-db / scan / diff / report / kb / engines / agents] --> ORCH
-    WEB[基础 WebUI（M5）<br/>FastAPI + React + AntD] --> ORCH
+    WEB[WebUI（M5）FastAPI + React + AntD<br/>扫描管理 · finding 审阅 · agent 控制台<br/>复核队列 · Prompt 版本管理] --> ORCH
 
     subgraph ORCH[LangGraph 中心编排：共享状态 AuditState + Supervisor + 预算守卫]
         SUP[Supervisor（中心决策点）]
@@ -129,20 +132,23 @@ flowchart TD
     SUP --> LLM
 
     subgraph DB[(PostgreSQL 16 + pgvector 单实例分 schema，Docker 挂载盘)]
-        T1[scans / findings / budget_ledger]
+        T1[scans / findings / budget_ledger / node_runs 遥测]
         T2[code_chunks 向量]
         T3[kb_chunks 安全知识库]
-        T4[LangGraph checkpoints]
+        T4[agent_configs / prompt_versions]
+        T5[LangGraph checkpoints]
     end
 ```
 
 **中心化原则（已确认：混合编排）**：所有 agent 是无自主路由的「专家节点」，只接收 Supervisor 指令、只读写共享 `AuditState`，无 agent 间点对点 handoff。主链路为**确定性状态机**；仅在异常情形（证据不足需补查、引擎结论冲突）由 LLM Supervisor 介入动态调度，且始终受预算守卫约束。收益：预算单点管控、行为可审计、失败可回放。
 
+**Agent 定义与 Prompt 加载 *(默认)*：** agent 注册表（清单/职责/可用工具/默认模型分配）以代码内常量维护并同步进 `agent_configs` 表；Prompt 以数据库 `prompt_versions` 为生效源（按 agent + 版本），文件系统仅作初始化种子与备份导出。WebUI 修改后下个扫描生效，进行中的扫描不中断。
+
 ## 7. 多 Agent 详细设计
 
 ### 7.1 共享状态 `AuditState`（TypedDict）
 
-`repo_path`、`license_declaration`（oss/proprietary + 声明时间戳）、`diff_scope`（增量模式时：变更文件集 + 可达闭包）、`profile`（语言/框架/入口点）、`engine_findings[]`、`triaged_findings[]`、`evidence{finding_id: 调用链+代码切片}`、`budget{tokens, calls, cost_usd, max_*}`、`phase`、`messages[]`。
+`repo_path`、`license_declaration`（oss/proprietary + 声明时间戳）、`diff_scope`（增量模式时：变更文件集 + 可达闭包）、`profile`（语言/框架/入口点）、`engine_findings[]`、`triaged_findings[]`、`evidence{finding_id: 调用链+代码切片}`、`budget{tokens, calls, cost_usd, max_*}`、`prompt_versions{agent: version}`、`phase`、`messages[]`。
 
 ### 7.2 Agent 职责表
 
@@ -158,13 +164,14 @@ flowchart TD
 
 - **确定性主链路**：`recon → scan → (retrieval → triage) × N → report`
 - **LLM Supervisor 介入点**：① TriageAgent 报告「证据不足需补查」；② 引擎间结论冲突（如同一点位 CodeQL 报/Joern 不报）；③ 主链路某 agent 失败需重规划
-- **预算守卫（已确认默认值）**：`MAX_TOKENS=500000`、`MAX_TOOL_CALLS=500`、`MAX_COST_USD=10`、`MAX_FINDINGS=200`（环境变量可覆写）；达 80% 预警、100% 熔断进入报告阶段（按已验证结果降级出报）；台账写 PostgreSQL `budget_ledger`
-- **持久化**：LangGraph `PostgresSaver`（**单实例分 schema**，已确认；业务表与 checkpoint 分 schema 隔离）；`HUMAN_REVIEW=true` 时 report 节点前 interrupt
+- **预算守卫（已确认默认值）**：`MAX_TOKENS=500000`、`MAX_TOOL_CALLS=500`、`MAX_COST_USD=10`、`MAX_FINDINGS=200`（环境变量可覆写，WebUI 亦可按 agent 覆写）；达 80% 预警、100% 熔断进入报告阶段（按已验证结果降级出报）；台账写 PostgreSQL `budget_ledger`
+- **持久化**：LangGraph `PostgresSaver`（**单实例分 schema**，已确认；业务表与 checkpoint 分 schema 隔离）；`HUMAN_REVIEW=true` 时 report 节点前 interrupt，恢复由 WebUI 复核队列触发（FR-9）
+- **遥测（已确认：台账直写 PG）**：节点起止时间、耗时、token 消耗、工具调用次数、状态与错误，每节点结束时写 `node_runs` 表；WebUI 轮询读取，不引入消息队列/时序库
 
 ## 8. 数据架构
 
 - **部署（已确认）**：`pgvector/pgvector:pg16` 镜像**单实例**，业务 schema 与 LangGraph checkpoint schema 分层隔离；数据目录绑定挂载盘（`CODESENTRY_PGDATA_HOST`，如 `/mnt/data/codesentry/pgdata`）；Joern CPG 与扫描工作目录同落挂载盘（`CODESENTRY_WORK_DIR`）
-- **核心表**：`projects`、`scans`（含 license 声明、扫描模式 full/diff）、`findings`（引擎原始 + triage 结论 + 置信度 + 证据 JSON）、`code_chunks`（`embedding vector(d)` + 文件/符号元数据）、`kb_chunks`、`budget_ledger`；checkpoint 表
+- **核心表**：`projects`、`scans`（含 license 声明、扫描模式 full/diff、prompt 版本快照）、`findings`（引擎原始 + triage 结论 + 置信度 + 证据 JSON）、`code_chunks`（`embedding vector(d)` + 文件/符号元数据）、`kb_chunks`、`budget_ledger`、`node_runs`（节点遥测）、`agent_configs`（运行时配置）、`prompt_versions`（Prompt 版本化）；checkpoint 表
 - **RAG 切块（已确认）**：AST 函数/类粒度（tree-sitter，借鉴 RepoAgent）；向量 = 代码摘要 + 签名 + 调用关系
 - **Embedding（已确认：双通道兼顾）**：提供统一 Embedding 接口层——① OpenAI 兼容远程接口（`CODESENTRY_EMBEDDING_MODEL` 可配）；② 本地部署 bge-m3（模型文件落挂载盘，经 vLLM/Ollama/自托管推理服务暴露，同样走 OpenAI 兼容协议）。二者按配置切换，维度入库时自动探测
 - **知识库**：CWE/OWASP 官方公共资料 + 用户自有安全规范；`codesentry kb import <dir>` 导入
@@ -178,15 +185,22 @@ flowchart TD
   - **M0 脚手架**：目录结构、docker-compose（挂载盘卷、单实例分 schema）、配置加载、CLI 骨架、`.env.example` 扩展（Joern/Semgrep/Embedding 双通道/PG 段 + CodeQL OSS Gate 开关）、license 检查脚本
   - **M1 引擎集成**：三引擎并行调度 + 许可 Gate + §4.2 覆盖矩阵逐组合验证 + 统一 Finding 模型 + SARIF 导出
   - **M2 数据与 RAG**：pgvector 入库、AST 切块、Embedding 双通道、kb 导入、混合检索 API
-  - **M3 多 agent 流水线**：LangGraph 全链路 + checkpointer + 预算守卫 + 人工复核中断 + **增量审计（diff 可达闭包）**
+  - **M3 多 agent 流水线**：LangGraph 全链路 + checkpointer + 预算守卫 + 节点遥测直写 `node_runs` + 人工复核中断 + **增量审计（diff 可达闭包）**
   - **M4 质量评测（已确认：自建 + 公开双轨）**：六语言自建样例漏洞仓做回归基线（每语言 5–10 个真实 CVE 模式用例）；公开基准（OWASP Benchmark、NIST Juliet 等，许可逐个核实）做能力对标；统计检出/误报/漏报与成本，迭代 prompt
-  - **M5 基础 WebUI（v1 交付）**：FastAPI + React + AntD——扫描管理、finding 审阅、增量结果查看、报告展示；完整 WebUI 能力为 v2
+  - **M5 WebUI（v1 交付，已确认全量 agent 管理）**：FastAPI + React + AntD——
+    - 扫描管理：发起全量/增量扫描、进度查看、报告展示（SARIF/Markdown）
+    - finding 审阅：证据链查看、严重度/置信度标注
+    - **agent 控制台**：agent 清单与健康、运行拓扑图 + 节点时间线（轮询刷新）、token/成本/预算消耗统计、按 agent 模型分配与预算覆写、启停
+    - **Prompt 管理**：在线编辑、版本列表与 diff 对比、一键回滚（版本入库，扫描记录所用版本）
+    - **人工复核队列**：interrupt 恢复、逐条通过/驳回/调整置信度
+  - **v2 候选**：WebUI 认证与多用户、PR 平台集成（GitHub/GitLab App）、自动修复闭环、SCA/IaC
 
 ## 10. 错误处理与测试要点
 
 - 引擎子进程超时/崩溃 → 记录并以其余引擎结果继续；三引擎全失败 → 中止该扫描并落因
 - LLM 调用失败 → 指数退避重试 3 次，仍失败则该 finding 标「未验证」保留引擎原始结论
-- 测试：Finding 归一化单测；许可 Gate 单测（闭源声明时禁用 CodeQL）；diff 可达闭包单测；pgvector 检索集成测试（testcontainers）；六语言小型样例仓端到端测试；LLM 逻辑用录制回放（mock）测试
+- Prompt 版本校验：生效版本缺失/损坏时回退到代码内种子 Prompt 并告警（WebUI 标红）
+- 测试：Finding 归一化单测；许可 Gate 单测（闭源声明时禁用 CodeQL）；diff 可达闭包单测；Prompt 版本解析与回退单测；pgvector 检索集成测试（testcontainers）；六语言小型样例仓端到端测试；LLM 逻辑用录制回放（mock）测试；WebUI API 契约测试
 
 ## 11. 风险
 
@@ -195,9 +209,10 @@ flowchart TD
 | Joern 对 Go/PHP/Python 前端较新，解析质量待验证 | M1 逐组合实测（§4.2）；弱前端场景降级为 Semgrep + LLM，并在报告元数据标注 |
 | CodeQL 许可 Gate 被绕过/误用（闭源仓库误开 CodeQL） | Gate 由 ScanAgent 强制执行（不依赖用户自觉）；声明与台账落库可审计；发行物不含 CodeQL |
 | LLM 误报/漏报抖动 | 温度 0 + 确定性主链路 + 置信度阈值出报 + 人工复核开关 |
-| 成本失控 | §7.3 硬预算熔断 |
+| 成本失控 | §7.3 硬预算熔断（环境变量 + WebUI 覆写双通道，取更严者生效） |
 | Semgrep 规则合规误用 | 规则仅经用户配置路径加载，发行物零内置（CI 检查） |
 | 公开评测基准许可不一（Juliet 属 NIST 公有领域，OWASP Benchmark 为 MIT，需逐个核） | M4 引入前逐项做许可核验，核验记录入库 |
+| WebUI 无认证（v1 面向本地/内网） | 文档明示仅限本地/内网部署，默认仅绑定 127.0.0.1 *(默认)*；认证体系列为 v2 首批 |
 
 ## 12. 决策记录（2026-10-18 与需求方逐项确认）
 
@@ -214,13 +229,17 @@ flowchart TD
 | D9 | RAG 切块粒度 | AST 函数/类粒度（tree-sitter） |
 | D10 | Embedding | 双通道兼顾：OpenAI 兼容接口 + 本地部署 bge-m3（模型文件落挂载盘），按配置切换 |
 | D11 | 增量审计 | **提入 v1**（FR-10）；范围外清单相应缩减 |
-| D12 | 增量审计形态 | CLI 本地 diff + CI/CD 集成（退出码/SARIF 产物）+ 基础 WebUI 查看（M5 随 v1 交付） |
+| D12 | 增量审计形态 | CLI 本地 diff + CI/CD 集成（退出码/SARIF 产物）+ WebUI 查看（M5 随 v1 交付） |
 | D13 | CLI 命令集 | 七命令：init-db / scan / diff / report / kb import / engines check / agents list |
 | D14 | 预算与开关默认值 | 预算四项按默认；HUMAN_REVIEW 默认关；LLM 温度默认 0（均环境变量可覆写） |
 | D15 | Java 分析模式 | 源码级 + 可选构建（用户可配构建命令，CodeQL autobuild 可选） |
-| D16 | WebUI 技术栈 | FastAPI + React + Ant Design（M5 基础版随 v1 交付） |
+| D16 | WebUI 技术栈 | FastAPI + React + Ant Design（M5 随 v1 交付） |
 | D17 | 评测基线 | 自建六语言样例仓（回归基线）+ 公开基准（能力对标）双轨 |
 | D18 | PostgreSQL 拓扑 | 单实例分 schema（业务与 checkpoint 分层），数据全部落挂载盘 |
+| D19 | WebUI Agent 管理深度 | **全量管理含 Prompt**：监控 + 运行时配置（模型分配/启停/预算）+ Prompt 在线编辑/版本化/回滚 |
+| D20 | 人工复核入口 | 进 WebUI 待复核队列（逐条证据链查看，通过/驳回/调置信度，确认后恢复流水线） |
+| D21 | 运行可视化 | LangGraph 拓扑图 + 节点时间线（状态/耗时/工具调用/预算，轮询刷新） |
+| D22 | 遥测存储 | 台账直写 PostgreSQL（`node_runs` 表），不引入消息队列/时序库 |
 
 ## 13. 参考资料（调研来源）
 
