@@ -10,16 +10,17 @@ rules:
       - pattern: requests.post($U, ...)
       - pattern: urllib.request.urlopen($U, ...)
 
-  - id: codesentry.java.path-traversal-file-read
-    message: 用户输入拼接进文件路径直接读取（Path Traversal）
-    severity: ERROR
+  - id: codesentry.java.path-traversal-concat
+    message: 用户可控输入拼接进路径（Path Traversal 风险——请检查流向是否入 File/Paths/流读取）
+    severity: WARNING
     languages: [java]
     metadata:
       cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
-    pattern-either:
-      - pattern: new File($BASE + $INPUT)
-      - pattern: new File($P)
-      - pattern: Paths.get($BASE + $INPUT)
+    patterns:
+      - pattern: String $P = $LIT + $INPUT;
+      - metavariable-regex:
+          metavariable: $LIT
+          regex: ^".*/.*"$
 
   - id: codesentry.js.proto-pollution-merge
     message: 递归合并无键过滤——原型污染风险
@@ -27,8 +28,11 @@ rules:
     languages: [javascript, typescript]
     metadata:
       cwe: "CWE-1321: Improperly Controlled Modification of Object Prototype Attributes"
-    pattern: |
-      function $F($TARGET, $SRC) { ... }
+    pattern-either:
+      - pattern: |
+          for (const $K of Object.keys($SRC)) { ... }
+      - pattern: |
+          for (const $K in $SRC) { ... }
 
   - id: codesentry.go.command-injection-exec
     message: 用户输入直接作为 exec.Command 参数（命令注入）
