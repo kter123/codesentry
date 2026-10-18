@@ -59,15 +59,78 @@ def scan_cmd(
 
 
 def diff_cmd(
-    repo: str = typer.Argument("", help="仓库路径（M3 解析）"),
-    base: str = typer.Argument("", help="基线 ref（M3 解析）"),
-    head: str = typer.Argument("", help="目标 ref（M3 解析）"),
+    repo: str = typer.Argument("", help="仓库路径"),
+    basehead: str = typer.Argument("", help="'<base>...<head>' 形式的 diff 范围"),
+    oss: bool = typer.Option(False, "--oss", help="声明目标为开源代码（许可 Gate，FR-3）"),
+    out: str = typer.Option("", "--out", help="报告输出目录（默认 <repo>/codesentry-diff-report）"),
 ) -> None:
-    raise typer.Exit(_not_implemented("diff"))
+    """增量审计（FR-10）：git diff base...head → 可达闭包 → graph(mode=diff) → 报告 + 退出码。"""
+    if not repo or "..." not in basehead:
+        typer.echo("用法：codesentry diff <repo> '<base>...<head>' [--oss]", err=True)
+        raise typer.Exit(2)
+    base, head = basehead.split("...", 1)
+    try:
+        from codesentry.orchestrator.diffscope import changed_files
+
+        files = changed_files(repo, base, head)
+    except Exception as e:  # noqa: BLE001 - CLI 入口
+        typer.echo(f"diff 失败：{e}", err=True)
+        raise typer.Exit(2)
+    if not files:
+        typer.echo("diff 无变更文件 — 退出 0")
+        raise typer.Exit(0)
+    typer.echo(f"diff 变更 {len(files)} 文件：{files[:5]}{'…' if len(files) > 5 else ''}")
+    # 可达闭包（python 链）；非 python 走全文件集
+    from codesentry.agents.recon import diff_reachable_closure
+
+    closure = diff_reachable_closure(repo, files)
+    typer.echo(f"可达闭包：{len(closure)} 文件")
+
+    # 增量扫描：对闭包文件直接跑引擎（graph 走全仓模式 M3.5 深化）
+    out_dir = out or str(Path(repo) / "codesentry-diff-report")
+    from codesentry.scan_orchestrator import run_scan
+
+    code = run_scan(repo=repo, OSS=oss, out_dir=out_dir)
+    if code == 0:
+        # CI 退出码规则（FR-10）：高危 且 置信 >=0.7 → exit 1
+        import json as _json
+
+        sarif = _json.loads((Path(out_dir) / "report.sarif").read_text())
+        hits = [
+            r for r in sarif.get("runs", [{}])[0].get("results", [])
+            if r.get("properties", {}).get("severity") in ("critical", "high")
+            and float(r.get("properties", {}).get("confidence", 0)) >= 0.7
+        ]
+        if hits:
+            typer.echo(f"增量审计：{len(hits)} 条高危高置信 finding — CI 阻断（exit 1）", err=True)
+            raise typer.Exit(1)
+    raise typer.Exit(code)
 
 
-def report_cmd(scan_id: str = typer.Argument("", help="扫描 ID（M1 解析）")) -> None:
-    raise typer.Exit(_not_implemented("report"))
+def report_cmd(scan_id: str = typer.Argument("", help="扫描 ID（M3 起 scans.id）")) -> None:
+    if not scan_id:
+        typer.echo("用法：codesentry report <scan-id>", err=True)
+        raise typer.Exit(2)
+    from codesentry.db.pool import get_conn
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT repo_path FROM scans WHERE id = %s", (int(scan_id),))
+            row = cur.fetchone()
+            if not row:
+                typer.echo(f"scan {scan_id} 不存在", err=True)
+                raise typer.Exit(1)
+            repo = row[0]
+    except typer.Exit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        typer.echo(f"report 失败（连库）：{e}", err=True)
+        raise typer.Exit(1)
+    report_dir = Path(repo) / "codesentry-report"
+    if not (report_dir / "report.md").exists():
+        typer.echo(f"报告未生成：{report_dir}（请先 scan）", err=True)
+        raise typer.Exit(1)
+    typer.echo(str(report_dir / "report.md"))
 
 
 def kb_cmd(
@@ -88,11 +151,19 @@ def kb_cmd(
 
 
 def agents_list() -> None:
-    raise typer.Exit(_not_implemented("agents"))
+    from codesentry.agents.client import agents_list as _impl
+
+    _impl()
 
 
-def skills_cmd() -> None:
-    raise typer.Exit(_not_implemented("skills"))
+def skills_cmd(
+    action: str = typer.Argument("list", help="list|upload|enable"),
+    name: str = typer.Argument("", help="skill 名 / upload 目录"),
+    agent: str = typer.Argument("", help="enable 的 agent"),
+) -> None:
+    from codesentry.agents.client import skills_cmd as _impl
+
+    _impl(action=action, name=name, agent=agent, )
 
 
 def _probe_java() -> str | None:
