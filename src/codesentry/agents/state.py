@@ -1,5 +1,6 @@
 """AuditState 共享状态（agent.md §7.1）+ Agent 名常量。"""
 
+from datetime import UTC
 from typing import TypedDict
 
 AGENT_NAMES = ("recon", "scan", "retrieval", "triage", "poc_gen", "report")
@@ -40,11 +41,11 @@ class AuditState(TypedDict, total=False):
 
 
 def new_state(repo_path: str, OSS: bool, scan_id: int | None = None) -> AuditState:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return AuditState(
         repo_path=repo_path,
-        license_declaration={"OSS": OSS, "declared_at": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+        license_declaration={"OSS": OSS, "declared_at": datetime.now(UTC).isoformat(timespec="seconds")},
         diff_scope=None,
         profile={},
         engine_findings=[],

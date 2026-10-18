@@ -3,7 +3,7 @@ import os
 import pytest
 
 from codesentry.agents.llm import LLMClient, LLMError
-from codesentry.agents.state import AGENT_NAMES, AuditState, new_state
+from codesentry.agents.state import AGENT_NAMES, new_state
 
 
 def _clean(monkeypatch):
