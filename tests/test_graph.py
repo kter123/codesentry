@@ -23,7 +23,7 @@ def test_graph_runs_full_chain(tmp_path, monkeypatch):
         retrieval_agent=run_retrieval,
         triage_agent=lambda s: {"triaged_findings": [], "phase": "poc_gen"},
         poc_agent=lambda s: {"poc_results": {}, "phase": "report"},
-        report_agent_fn=lambda s, out="/tmp/x-report": run_report(s, out),
+        report_agent_fn=lambda s, out=str(tmp_path / "rep"): run_report(s, out),
         checkpointer=None,
         scan_id_holder=holder,
     )
