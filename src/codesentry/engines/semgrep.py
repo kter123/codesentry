@@ -20,7 +20,7 @@ def run_semgrep(
         cmd = [semgrep_bin, "scan", "--json", "--quiet", "--config", config, repo]
     r = run_subprocess(cmd, timeout=timeout, cwd=cwd)
     if not r.ok:
-        return EngineResult(engine="semgrep", status="crashed", reason=r.reason, stderr=r.stderr)
+        return EngineResult(engine="semgrep", status="crashed", reason=r.reason)
     try:
         doc = json.loads(r.stdout)
     except json.JSONDecodeError as e:

@@ -3,8 +3,8 @@ from codesentry.reportex.sarif import findings_to_sarif, write_sarif
 
 
 def _f(**kw):
-    base = dict(rule_id="py/ssrf", cwe=918, severity="high", confidence=0.7,
-                file="a.py", line=10, message="SSRF", engine="semgrep")
+    base = {"rule_id": "py/ssrf", "cwe": 918, "severity": "high", "confidence": 0.7,
+            "file": "a.py", "line": 10, "message": "SSRF", "engine": "semgrep"}
     base.update(kw)
     return Finding(**base)
 

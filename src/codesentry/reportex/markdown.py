@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from codesentry.models import Finding, ScanProfile
+from codesentry.models import Finding
 
 _SEV_ORDER = ["critical", "high", "medium", "low", "info"]
 _SEV_CN = {"critical": "严重", "high": "高危", "medium": "中危", "low": "低危", "info": "信息"}
@@ -12,7 +12,7 @@ _ENGINE_CN = {"codeql": "CodeQL", "joern": "Joern", "semgrep": "Semgrep"}
 def render_markdown(
     findings: list[Finding],
     profile_languages: list[str],
-    license_declaration: dict | None = None,
+    license_declaration: dict[str, str | bool] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("# CodeSentry 安全审计报告")
@@ -23,8 +23,10 @@ def render_markdown(
     if license_declaration:
         lic = "开源" if license_declaration.get("OSS") else "闭源（proprietary）"
         lines.append(f"- 许可声明：{lic} @ {license_declaration.get('declared_at', '')}")
-    counts = Counter(f.severity for f in findings)
-    summary = ", ".join(f"{_SEV_CN[s]} {counts.get(s, 0)}" for s in _SEV_ORDER if counts.get(s))
+    counts: Counter[str] = Counter(f.severity for f in findings)
+    summary = ", ".join(
+        f"{_SEV_CN[s]} {counts[s]}" for s in _SEV_ORDER if s in counts
+    )
     lines.append(f"- 发现：共 {len(findings)} 条（{summary or '无'}）")
     lines.append("")
     lines.append("## Finding 明细")
@@ -40,6 +42,6 @@ def render_markdown(
         lines.append(f"- CWE：CWE-{f.cwe}")
         lines.append(f"- 引擎：{_ENGINE_CN.get(f.engine, f.engine)}；置信度：{f.confidence:.2f}")
         lines.append(f"- 消息：{f.message}")
-        lines.append(f"- 修复建议：（M3 由 TriageAgent 补全）")
+        lines.append("- 修复建议：（M3 由 TriageAgent 补全）")
         lines.append("")
     return "\n".join(lines)

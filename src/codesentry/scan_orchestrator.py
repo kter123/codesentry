@@ -5,7 +5,7 @@ M1 不引入 LangGraph（M3 职责）；M1 用 ThreadPoolExecutor 做引擎级�
 
 import concurrent.futures
 import os
-import shutil
+from datetime import UTC
 from pathlib import Path
 
 import typer
@@ -66,7 +66,11 @@ def run_engines_parallel(specs: list, **kwargs) -> list[EngineResult]:
                     (n for n in ENGINE_ORDER if n in name), "joern"
                 )
                 results.append(
-                    EngineResult(engine=engine, status="crashed", reason=str(e))
+                    EngineResult(
+                        engine=engine,  # type: ignore[arg-type]  # 由 spec 名推定，非 run_* 命名时兜底 joern
+                        status="crashed",
+                        reason=str(e),
+                    )
                 )
     order = {n: i for i, n in enumerate(ENGINE_ORDER)}
     results.sort(key=lambda r: order.get(r.engine, 99))
@@ -93,8 +97,6 @@ def run_scan(repo: str, OSS: bool, out_dir: str) -> int:
     engine_names = select_engines(OSS=OSS, lang=lang)
     blocked = [n for n in engine_names if not gate.check_engine(n)[0]]
 
-    runners = {"codeql": run_codeql, "joern": run_joern, "semgrep": run_semgrep}
-    engine_bin_key = None
 
     def _engine_spec(name):
         def spec(**kw):
@@ -140,6 +142,6 @@ def run_scan(repo: str, OSS: bool, out_dir: str) -> int:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")

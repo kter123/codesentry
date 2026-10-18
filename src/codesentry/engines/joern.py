@@ -4,10 +4,8 @@ M1 策略：joern-parse 生成 CPG → joern 执行自研查询脚本产出 aler
 真实验证在 tests/test_examples_matrix.py（二进制可用时）。
 """
 
-import json
 import os
 import shutil
-from pathlib import Path
 
 from codesentry.models import EngineResult
 

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from codesentry.models import EngineResult, Finding, LicenseDeclaration, ScanProfile
+from codesentry.models import EngineResult, Finding, LicenseDeclaration
 
 
 def test_finding_minimal():

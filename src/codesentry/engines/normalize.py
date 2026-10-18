@@ -2,10 +2,10 @@
 
 import re
 
-from codesentry.models import Finding
+from codesentry.models import Finding, Severity
 
 # semgrep severity（官方大小写）→ 统一 severity
-_SEMGREP_SEV = {"ERROR": "high", "WARNING": "medium", "INFO": "low"}
+_SEMGREP_SEV: dict[str, Severity] = {"ERROR": "high", "WARNING": "medium", "INFO": "low"}
 
 # 引擎置信度初值（M1 固定；M3 由 Triage 调整）
 _ENGINE_CONFIDENCE = {"semgrep": 0.5, "joern": 0.7, "codeql": 0.7}
@@ -23,13 +23,14 @@ def normalize_semgrep(doc: dict) -> list[Finding]:
     out: list[Finding] = []
     for r in doc.get("results", []):
         extra = r.get("extra", {})
-        raw_sev = (extra.get("severity") or "").upper()
+        raw_sev = str((extra.get("severity") or "")).upper()
         cwe_meta = (extra.get("metadata") or {}).get("cwe") or ""
+        sev = _SEMGREP_SEV.get(raw_sev, "low")
         out.append(
             Finding(
                 rule_id=r.get("check_id") or "unknown",
                 cwe=_extract_cwe(str(cwe_meta)),
-                severity=_SEMGREP_SEV.get(raw_sev, "low"),
+                severity=sev,
                 confidence=_ENGINE_CONFIDENCE["semgrep"],
                 file=r.get("path") or "",
                 line=(r.get("start") or {}).get("line") or 1,

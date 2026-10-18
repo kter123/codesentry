@@ -1,4 +1,4 @@
-from codesentry.engines.base import SubprocResult, run_subprocess
+from codesentry.engines.base import run_subprocess
 
 
 def test_run_success():
