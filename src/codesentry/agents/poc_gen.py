@@ -101,6 +101,7 @@ def run_poc_gen(state: dict, llm=None) -> dict:
             updated.append({**t, "poc": poc_results[key]})
             continue
         gen = gen_poc(llm, fdict, (state.get("evidence") or {}).get(key, {})) if llm else {"exploit_chain": [], "poc_script": "", "poc_kind": "local", "notes": "no llm", "rejected": False}
+        script = str(gen.get("poc_script") or "")
         if gen.get("rejected"):
             poc_results[key] = {
                 "exploit_chain": gen["exploit_chain"], "poc_file": "", "verdict": "plausible",
@@ -108,7 +109,7 @@ def run_poc_gen(state: dict, llm=None) -> dict:
             }
             updated.append({**t, "poc": poc_results[key]})
             continue
-        if not gen.get("poc_script"):
+        if not script:
             poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "", "verdict": "plausible",
                                 "execution_log": f"生成失败：{gen['notes']}"}
             updated.append({**t, "poc": poc_results[key]})
@@ -117,9 +118,9 @@ def run_poc_gen(state: dict, llm=None) -> dict:
         poc_dir.mkdir(parents=True, exist_ok=True)
         fname = f"poc_{re.sub(r'[^A-Za-z0-9]', '_', key)[:60]}.py"
         poc_file = str(poc_dir / fname)
-        Path(poc_file).write_text(gen["poc_script"], encoding="utf-8")
+        Path(poc_file).write_text(script, encoding="utf-8")
         if mode == "sandbox":
-            ex = execute_poc_local(gen["poc_script"], str(poc_dir))
+            ex = execute_poc_local(script, str(poc_dir))
             verdict = "verified" if ex["success"] else "plausible"  # 试跑失败 ≠ false_positive（§10）
             log = ex["log"]
         else:  # target：用户自备环境；M3 仅记录目标占位，实发 M5 + 显式授权
