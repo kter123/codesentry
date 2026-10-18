@@ -48,13 +48,14 @@ def scan_cmd(
         "", "--skills", help="本次扫描临时启用的 Skill 名单，逗号分隔（M3 生效）"
     ),
 ) -> None:
-    from codesentry.scan_orchestrator import run_scan
 
     if not repo:
         typer.echo("用法：codesentry scan <repo> [--oss] [--out DIR]", err=True)
         raise typer.Exit(2)
     out_dir = out or str(Path(repo) / "codesentry-report")
-    code = run_scan(repo=repo, OSS=oss, out_dir=out_dir)
+    from codesentry.orchestrator.runner import run_scan_graph
+
+    code = run_scan_graph(repo=repo, OSS=oss, out_dir=out_dir)
     raise typer.Exit(code)
 
 
