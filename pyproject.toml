@@ -9,6 +9,7 @@ dependencies = [
     "rich>=13",
     "pydantic-settings>=2.2",
     "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.3.3",
 ]
 
 [project.scripts]
