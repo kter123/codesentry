@@ -302,3 +302,17 @@ flowchart TD
 - RepoAgent（Apache-2.0，AST 切块）：https://github.com/OpenBMB/RepoAgent
 - ZeroPath（商业产品流程参考）：https://zeropath.com/
 - Team-Atlanta / Atlantis（AIxCC 获奖系统组件）：https://github.com/orgs/Team-Atlanta/repositories
+
+---
+
+## 14. 里程碑状态表（§0 第 8 步回填区）
+
+| 里程碑 | 状态 | spec/计划 | 实测验证 | commit |
+|---|---|---|---|---|
+| M0 脚手架 | ✅ 完成 | doc/2026-10-18-m0-scaffold-plan.md | compose 起库（挂载盘）/八命令/红线脚本/27 tests | e6fac5b…e16fed6 |
+| M1 引擎集成 | ✅ 完成（含 M1.5 真实现升级） | doc/2026-10-18-m1-engines-plan.md | 覆盖矩阵 11 pass+1 xfail(php2cpg 实验性崩溃→降级 Semgrep)；Joern 六语言实测；双引擎交叉印证（line11 同点位双报）；SARIF/MD 双报告实产出 | da9b006…b1e301d |
+| M2 数据与 RAG | ✅ 完成 | doc/2026-10-18-m2-data-rag-plan.md | pgvector 双库+混合检索（中文 FTS 命中实测）；kb import 幂等；Embedding 双通道 | c37b332…5432030 |
+| M3 多 agent 流水线 | ✅ 完成 | doc/2026-10-18-m3-multiagent-plan.md | LangGraph 六节点全链 CLI 端到端（scan_id=32 全 node_runs ok、findings 落库、snapshot 落盘）；human_review interrupt+resume；diff 闭包；PoC 三档+POC_RUN gating+危险 payload 拒绝；120+ tests 绿 | 785edc6…4e339a5 |
+| M3.5 RAG 五库+GraphRAG | 未开始 | 待编排 | — | — |
+| M4 质量评测 | 未开始 | — | — | — |
+| M5 WebUI | 未开始（设计需求已收集：图交互完整性/污点链联动/agent 可视化/PoC 链路四验证点已确认） | — | — | — |
