@@ -1,11 +1,23 @@
 """OpenAI 兼容 LLM 客户端（agent.md D5/D14/§10）。温度 0；指数退避重试 3 次后抛错。"""
 
+import contextvars
 import os
 import time
 
 
 class LLMError(Exception):
     pass
+
+
+# contextvar：本节点内 LLM tokens 增量（graph _wrap 节点结束时读取并归零回流 BudgetGuard）
+_node_tokens: contextvars.ContextVar[int] = contextvars.ContextVar("node_tokens", default=0)
+
+
+def current_tokens_delta() -> int:
+    """返回并清零本节点 tokens 增量（NFR-2 token 回流）。"""
+    val = _node_tokens.get()
+    _node_tokens.set(0)
+    return val
 
 
 class LLMClient:
@@ -51,7 +63,9 @@ class LLMClient:
                 )
                 usage = getattr(resp, "usage", None)
                 if usage is not None:
-                    self.tokens_used += getattr(usage, "total_tokens", 0) or 0
+                    used = getattr(usage, "total_tokens", 0) or 0
+                    self.tokens_used += used
+                    _node_tokens.set(_node_tokens.get() + used)
                 return resp.choices[0].message.content or ""
             except Exception as e:  # noqa: BLE001 - 上游网络异常必须退避重试
                 last_err = e

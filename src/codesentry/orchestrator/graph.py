@@ -20,9 +20,13 @@ from codesentry.orchestrator.telemetry import node_run
 def _wrap(node_name: str, fn, scan_id_holder: dict):
     def inner(state: AuditState) -> dict:
         sid = scan_id_holder.get("scan_id") or 0
-        with node_run(sid, node_name):
+        with node_run(sid, node_name) as _run:
             update = fn(state)
         bc = scan_id_holder.get("budget")
+        # LLM token 回流（NFR-2 token 优化基础）：agents 的 LLMClient 用量进台账
+        tokens_used = _get_last_tokens()
+        if bc is not None and tokens_used:
+            bc.record(tokens=tokens_used, phase=node_name)
         if bc is not None:
             # budget 复本入 state（NFR 遥测）
             update = {**update, "budget": bc.to_state()}
@@ -30,6 +34,16 @@ def _wrap(node_name: str, fn, scan_id_holder: dict):
 
     inner.__name__ = fn.__name__
     return inner
+
+
+def _get_last_tokens() -> int:
+    """读取当前 LLMClient 本次节点用掉的 tokens（contextvar 累计，无 client 时 0）。"""
+    try:
+        from codesentry.agents.llm import current_tokens_delta
+
+        return current_tokens_delta()
+    except Exception:  # noqa: BLE001 - 遥测失败不阻塞
+        return 0
 
 
 def route_after_triage(state: AuditState) -> str:

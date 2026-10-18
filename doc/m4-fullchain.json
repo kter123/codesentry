@@ -1,0 +1,209 @@
+{
+  "root": "bench/selfbuilt",
+  "files": 24,
+  "tp": 15,
+  "fp": 0,
+  "fn": 0,
+  "recall": 1.0,
+  "detail": {
+    "safe_printf.c": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "vuln_printf.c": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_strcpy.c": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "safe_cmd.go": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "vuln_cmd.go": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "demote"
+      ]
+    },
+    "vuln_sqli.go": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "SafeCmd.java": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "SafeSqli.java": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "VulnCmd.java": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "VulnDeserial.java": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "VulnSqli.java": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "safe_proto.js": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "vuln_proto.js": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_sqli.js": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "safe_xss.php": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "vuln_debug.php": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_sqli.php": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_xss.php": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "safe_cmd.py": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "safe_deserial.py": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "safe_sqli.py": {
+      "expect": "clean",
+      "engine_hit": false,
+      "llm_hit": false,
+      "engine_count": 0,
+      "llm_verdicts": []
+    },
+    "vuln_cmd.py": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_deserial.py": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    },
+    "vuln_sqli.py": {
+      "expect": "vulnerable",
+      "engine_hit": true,
+      "llm_hit": true,
+      "engine_count": 1,
+      "llm_verdicts": [
+        "keep"
+      ]
+    }
+  },
+  "tokens_used": 5305
+}
