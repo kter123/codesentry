@@ -2,7 +2,7 @@
 
 > **本文件是 codesentry 项目的唯一需求与架构来源（SSOT）**。所有后续执行（脚手架、里程碑、代码评审）以本文件为准；修改需求先改本文件。
 >
-> - 状态：**v1.4（2026-10-18）**——全部决策已与需求方逐项确认（见 §12 决策记录 D1–D38），待需求方对全文做最终批准
+> - 状态：**v1.5（2026-10-18）**——v1.4 全部确认 + D39 GraphRAG 路线A；全量决策已与需求方逐项确认（见 §12 决策记录 D1–D39）
 > - 位置：按需求方要求保存于仓库根目录 `agent.md`
 
 ---
@@ -47,7 +47,7 @@
 | FR-2 | 三引擎静态分析 | CodeQL（仅开源代码场景）+ Joern（CPG 数据流/污点）+ Semgrep（规则快扫），结果归一为统一 Finding 模型 |
 | FR-3 | 许可分流（Gate） | 扫描时用户声明目标代码许可状态（`--oss` / 默认闭源处理）；仅声明为开源时启用 CodeQL，声明记录进扫描台账。平台**不代为分发 CodeQL CLI**，仅探测用户自装二进制 |
 | FR-4 | AI 审计流水线 | 中心化多 agent 对引擎结果做验证、链路补全、置信度评级、去重合并 |
-| FR-5 | RAG 检索（v1.3 扩展） | RAG 为**审计大脑**，四库角色（已确认）：① **代码库**（code_chunks）——AST 函数/类切块 + 签名/调用关系；② **安全知识库**（kb_chunks）——CWE/OWASP 公共资料 + 用户自有规范；③ **历史漏洞案例库**（vuln_cases，新增）——存历史扫描中经人工确认/verified 的漏洞案例（含利用链路、PoC、修复方案），新扫描检索相似案例直接指导 TriageAgent 判别与 **PoCGenAgent 生成**（经验复用，越用越准）；④ **漏洞模式/规则库**（audit_patterns，新增）——漏洞模式、引擎规则模板、自研 Joern/Semgrep 查询语料化，审计时按语言/框架检索对应检测模式反哺 agent 判断（主动）；⑤ **策略库**（scan_strategies，新增）——存相似项目的历史扫描策略与配置（引擎组合/规则集/参数），ReconAgent/Supervisor 检索相似项目策略指引扫描计划与编排决策。检索统一走 pgvector 向量 + 全文混合 |
+| FR-5 | RAG 检索（v1.3 扩展） | RAG 为**审计大脑**，四库角色（已确认）：① **代码库**（code_chunks）——AST 函数/类切块 + 签名/调用关系；② **安全知识库**（kb_chunks）——CWE/OWASP 公共资料 + 用户自有规范；③ **历史漏洞案例库**（vuln_cases，新增）——存历史扫描中经人工确认/verified 的漏洞案例（含利用链路、PoC、修复方案），新扫描检索相似案例直接指导 TriageAgent 判别与 **PoCGenAgent 生成**（经验复用，越用越准）；④ **漏洞模式/规则库**（audit_patterns，新增）——漏洞模式、引擎规则模板、自研 Joern/Semgrep 查询语料化，审计时按语言/框架检索对应检测模式反哺 agent 判断（主动）；⑤ **策略库**（scan_strategies，新增）——存相似项目的历史扫描策略与配置（引擎组合/规则集/参数），ReconAgent/Supervisor 检索相似项目策略指引扫描计划与编排决策。检索统一走 pgvector 向量 + 全文混合。**GraphRAG（v1.5 新增，已确认路线 A）**：切块时同步抽取代码图边（函数→函数调用、文件→import、函数→API/sink 节点），显式存 PostgreSQL `code_graph`（节点/边表，递归 CTE 查询，不另装图数据库）；TriageAgent 可达性验证与 PoCGenAgent 利用链路构造沿图 BFS 拉取沿链切片+边进上下文；增量审计的可达闭包（FR-10）升级为真调用图闭包（BFS from diff files） |
 | FR-6 | 审计报告 | 中文 Markdown + SARIF 2.1.0 导出；含严重度、置信度、证据链、修复建议 |
 | FR-7 | 预算与可观测 | token/成本/调用次数硬预算；节点级遥测（起止/耗时/token/工具调用/状态）直写 PostgreSQL 台账；全程落库可回放（LangGraph checkpoint） |
 | FR-8 | 规则自管理 | 平台作为**可分发展品不内置任何第三方规则包**；提供规则配置机制（路径/目录/自研规则），随包附少量原创规则（Apache-2.0） |
@@ -213,7 +213,7 @@ flowchart TD
   - **M1 引擎集成**：三引擎并行调度 + 许可 Gate + §4.2 覆盖矩阵逐组合验证 + 统一 Finding 模型 + SARIF 导出
   - **M2 数据与 RAG**：pgvector 入库、AST 切块、Embedding 双通道、kb 导入、混合检索 API
   - **M3 多 agent 流水线**：LangGraph 全链路 + checkpointer + 预算守卫 + 节点遥测直写 `node_runs` + Prompt/Skill 注入与版本快照 + 人工复核中断 + **增量审计（diff 可达闭包）** + **PoCGenAgent（生成 + sandbox 靶场 + 三档判定与执行日志回填）**
-  - **M3.5 RAG 五库（已确认五库角色）**：`vuln_cases` 历史案例库积累机制（confirmed/verified finding 自动沉淀 + 人工导入）、`audit_patterns` 漏洞模式语料化、`scan_strategies` 策略库与 ReconAgent/Supervisor 接入；M2 先行交付 code/kb 双库不影响 M3 启动
+  - **M3.5 RAG 五库（已确认五库角色）**：`vuln_cases` 历史案例库积累机制（confirmed/verified finding 自动沉淀 + 人工导入）、`audit_patterns` 漏洞模式语料化、`scan_strategies` 策略库与 ReconAgent/Supervisor 接入；**GraphRAG code_graph（v1.5 新增）**：同步抽边入库 + 图 BFS 检索 API + 接入 TriageAgent/PoCGenAgent 增强证据链 + 增量审计可达闭包升级；M2 先行交付 code/kb 双库不影响 M3 启动
   - **M4 质量评测（已确认：自建 + 公开双轨）**：六语言自建样例漏洞仓做回归基线（每语言 5–10 个真实 CVE 模式用例）；公开基准（OWASP Benchmark、NIST Juliet 等，许可逐个核实）做能力对标；统计检出/误报/漏报与成本，迭代 prompt；**自研种子 Skill 2–3 个**（如污点链审计要点）作为随包 Apache-2.0 示例
   - **M5 WebUI（v1 交付，已确认全量 agent 管理 + Skill 管理）**：FastAPI + React + AntD——
     - 扫描管理：发起全量/增量扫描（含 Skill 临时勾选）、进度查看、报告展示（SARIF/Markdown）
@@ -252,6 +252,7 @@ flowchart TD
 
 | # | 决策项 | 结论 |
 |---|---|---|
+| D39 | GraphRAG 落地 | 路线 A（代码调用图）：tree-sitter 抽边 → PG `code_graph` 节点/边表（递归 CTE，不装图数据库）；Triage/PoC 沿图 BFS 取证据；增量闭包升级真调用图闭包（2026-10-18 确认，先 A 后议 B 知识图谱 v2） |
 | D1 | 引擎组合 | 三引擎全带：CodeQL（仅开源代码场景）+ Joern + Semgrep，平台内置许可分流 |
 | D2 | v1 语言范围 | 六门：Python、Java、JS/TS、Go、C/C++、PHP |
 | D3 | 产品形态 | 可分发展品（第三方规则不内置，用户自备；平台附少量自研规则） |
