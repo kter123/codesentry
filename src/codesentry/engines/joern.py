@@ -136,12 +136,11 @@ def run_joern(
     work.mkdir(parents=True, exist_ok=True)
     cpg_out = work / f"{Path(repo).name}.bin"
 
-    jp = shutil.which("joern-parse")
     env = {**os.environ, "PATH": f"{Path(joern_path).parent}:{_JOERN_ROOT}:{os.environ.get('PATH', '')}"}
     abs_repo = str(Path(repo).resolve())
 
     def _frontend_cmd():
-        if fe_path.endswith(".sh") or fe_path.endswith(".bat"):
+        if fe_path.endswith((".sh", ".bat")):
             return ["sh", fe_path]
         return [fe_path]
 
