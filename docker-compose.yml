@@ -1,0 +1,16 @@
+# CodeSentry database stack — pgvector/pg16 single instance (agent.md §8, D18).
+# Data volume MUST be an absolute path on the mounted disk.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: codesentry-db
+    environment:
+      POSTGRES_USER: codesentry
+      POSTGRES_PASSWORD: ${CODESENTRY_PG_PASSWORD:?set CODESENTRY_PG_PASSWORD}
+      POSTGRES_DB: codesentry
+    volumes:
+      - ${CODESENTRY_PGDATA_HOST:?set CODESENTRY_PGDATA_HOST to mount-disk absolute path}:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped

@@ -13,8 +13,23 @@ def _not_implemented(cmd: str) -> int:
     return 1
 
 
-def init_db() -> None:
-    raise typer.Exit(_not_implemented("init-db"))
+def init_db(dry_run: bool = typer.Option(False, "--dry-run", help="只打印 DDL 不连库")) -> None:
+    from codesentry.config import get_settings
+    from codesentry.db.schema import render_ddl
+
+    if dry_run:
+        typer.echo(render_ddl())
+        return
+    try:
+        import psycopg
+
+        with psycopg.connect(get_settings().database_url) as conn:
+            conn.execute(render_ddl())
+        typer.echo("init-db 完成 — schema: codesentry, langgraph; extension: vector")
+    except Exception as e:  # noqa: BLE001 - 连库入口需对所有连不上/执行失败给出明确指引
+        typer.echo(f"init-db 失败：{e}", err=True)
+        typer.echo("提示：先 docker compose up -d 启动数据库", err=True)
+        raise typer.Exit(1)
 
 
 def scan_cmd(
