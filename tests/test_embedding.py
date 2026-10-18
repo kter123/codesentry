@@ -5,25 +5,6 @@ import pytest
 from codesentry.rag.embedding import EmbeddingClient
 
 
-class _FakeCompletions:
-    def __init__(self, dims):
-        self.dims = dims
-        self.calls = []
-
-    def create(self, *, model, input, **kw):
-        self.calls.append(len(input) if isinstance(input, list) else 1)
-        if isinstance(input, str):
-            input = [input]
-        return [
-            type("D", (), {"embedding": [0.1] * self.dims, "index": i})()
-            for i, input and enumerate(input) or enumerate([])
-        ]
-
-
-class _FakeEmbeddings(_FakeCompletions):
-    pass
-
-
 def test_client_requires_config(monkeypatch):
     for k in list(os.environ):
         if k.startswith("CODESENTRY_"):
