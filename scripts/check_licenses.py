@@ -4,6 +4,7 @@
 Exits: 0 = passed, 1 = violations found, 2 = not a git repo.
 Standard library only — must run outside the project venv.
 """
+
 import fnmatch
 import subprocess
 import sys
@@ -15,7 +16,7 @@ DOC_DIRS = ("doc/", "tests/")
 
 
 def _ls_files(repo: Path) -> list[str]:
-    r = subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True)
+    r = subprocess.run(["git", "ls-files"], check=False, cwd=repo, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"error: not a git repository: {repo}", file=sys.stderr)
         sys.exit(2)
@@ -28,7 +29,9 @@ def check_codeql_absence(files: list[str], repo: Path) -> list[str]:
         name = path.rsplit("/", 1)[-1]
         for pat in ("*.ql", "*.qll", "codeql*"):
             if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(path.lower(), f"*/{pat}"):
-                violations.append(f"{path}: CodeQL artifact found (red line: no CodeQL in distribution)")
+                violations.append(
+                    f"{path}: CodeQL artifact found (red line: no CodeQL in distribution)"
+                )
                 break
         else:
             full = repo / path
@@ -41,9 +44,12 @@ def check_codeql_absence(files: list[str], repo: Path) -> list[str]:
                     text = data.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                if "import codeql" in text or "from codeql" in text:
-                    if not any(path.startswith(d) for d in DOC_DIRS):
-                        violations.append(f"{path}: 'import codeql' found (red line: CodeQL SDK import)")
+                if ("import codeql" in text or "from codeql" in text) and not any(
+                    path.startswith(d) for d in DOC_DIRS
+                ):
+                    violations.append(
+                        f"{path}: 'import codeql' found (red line: CodeQL SDK import)"
+                    )
     return violations
 
 
@@ -51,7 +57,9 @@ def check_semgrep_rules_absence(files: list[str]) -> list[str]:
     return [
         f"{path}: official semgrep rules found (red line: rules not bundled)"
         for path in files
-        if "/semgrep-rules/" in f"/{path}/" or path.startswith("semgrep-rules/") or "/semgrep-rules/" in f"/{path}"
+        if "/semgrep-rules/" in f"/{path}/"
+        or path.startswith("semgrep-rules/")
+        or "/semgrep-rules/" in f"/{path}"
     ]
 
 

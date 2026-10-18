@@ -9,12 +9,16 @@ def _git_commit_all(repo: Path):
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "x", "--allow-empty"],
-        cwd=repo, check=True, capture_output=True,
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
 
 
 def _run(repo: Path) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(SCRIPT)], cwd=repo, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, str(SCRIPT)], cwd=repo, capture_output=True, text=True, check=False
+    )
 
 
 def test_clean_repo_passes(tmp_path):

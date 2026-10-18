@@ -5,7 +5,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-_MILESTONE_HINT = {"scan": "M1", "diff": "M3", "report": "M1", "kb": "M2", "agents": "M3", "skills": "M3"}
+_MILESTONE_HINT = {
+    "scan": "M1",
+    "diff": "M3",
+    "report": "M1",
+    "kb": "M2",
+    "agents": "M3",
+    "skills": "M3",
+}
 
 
 def _not_implemented(cmd: str) -> int:
@@ -34,7 +41,9 @@ def init_db(dry_run: bool = typer.Option(False, "--dry-run", help="只打印 DDL
 
 def scan_cmd(
     oss: bool = typer.Option(False, "--oss", help="声明目标为开源代码（许可 Gate，M1 生效）"),
-    skills: str = typer.Option("", "--skills", help="本次扫描临时启用的 Skill 名单，逗号分隔（M3 生效）"),
+    skills: str = typer.Option(
+        "", "--skills", help="本次扫描临时启用的 Skill 名单，逗号分隔（M3 生效）"
+    ),
 ) -> None:
     raise typer.Exit(_not_implemented("scan"))
 
@@ -69,7 +78,7 @@ def _probe_java() -> str | None:
         return None
     try:
         r = subprocess.run(
-            [which, "-version"], capture_output=True, text=True, timeout=15
+            [which, "-version"], capture_output=True, text=True, timeout=15, check=False
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
