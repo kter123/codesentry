@@ -16,8 +16,8 @@ class EmbeddingClient:
     def __init__(self, base_url: str, model: str, api_key: str = "") -> None:
         if not model or not base_url:
             raise RuntimeError(
-                "embedding channel 未配置：需 CODESENTRY_EMBEDDING_MODEL 与 CODESENTRY_MODEL_BASE_URL"
-                "（本地 bge-m3 也应经 OpenAI 兼容协议暴露，如 http://127.0.0.1:11434/v1）"
+                "embedding channel 未配置：需 CODESENTRY_EMBEDDING_BASE_URL + CODESENTRY_EMBEDDING_MODEL"
+                "（本地 bge-m3 经 ollama 暴露：http://127.0.0.1:11434/v1）"
             )
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -28,10 +28,13 @@ class EmbeddingClient:
 
     @classmethod
     def from_config(cls) -> "EmbeddingClient":
+        from codesentry.config import get_settings
+
+        s = get_settings()
         return cls(
-            base_url=os.environ.get("CODESENTRY_MODEL_BASE_URL", ""),
-            model=os.environ.get("CODESENTRY_EMBEDDING_MODEL", ""),
-            api_key=os.environ.get("CODESENTRY_MODEL_API_KEY", ""),
+            base_url=s.embedding_base_url or s.model_base_url,
+            model=s.embedding_model,
+            api_key=s.embedding_api_key or "",
         )
 
     @property

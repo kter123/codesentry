@@ -28,6 +28,8 @@ class Settings(BaseSettings):
 
     # embedding (D10)
     embedding_model: str = ""
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
 
     # poc (D28, D32)
     poc_run: Literal["off", "sandbox", "target"] = "off"
