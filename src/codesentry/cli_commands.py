@@ -70,8 +70,21 @@ def report_cmd(scan_id: str = typer.Argument("", help="扫描 ID（M1 解析）"
     raise typer.Exit(_not_implemented("report"))
 
 
-def kb_cmd() -> None:
-    raise typer.Exit(_not_implemented("kb"))
+def kb_cmd(
+    action: str = typer.Argument("help", help="子动作：import"),
+    path: str = typer.Argument("", help="import 的目录路径"),
+) -> None:
+    if action != "import" or not path:
+        typer.echo("用法：codesentry kb import <dir>", err=True)
+        raise typer.Exit(2)
+    from codesentry.rag.kb_import import import_kb_dir
+
+    try:
+        n = import_kb_dir(path)
+    except Exception as e:  # noqa: BLE001 - CLI 入口给出可读错误
+        typer.echo(f"kb import 失败：{e}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"kb import 完成：入库 {n} 条（sha256 幂等）")
 
 
 def agents_list() -> None:
