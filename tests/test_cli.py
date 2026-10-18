@@ -6,7 +6,7 @@ import codesentry.cli as cli_mod
 runner = CliRunner()
 
 ALL_COMMANDS = ["init-db", "scan", "diff", "report", "kb", "engines", "agents", "skills"]
-PLACEHOLDER_COMMANDS = ["diff", "report", "agents", "skills"]
+PLACEHOLDER_COMMANDS = []  # M3 起八命令全部接真
 
 
 @pytest.mark.parametrize("cmd", ALL_COMMANDS)
