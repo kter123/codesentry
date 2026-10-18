@@ -83,8 +83,17 @@ def _python_callgraph(repo: str) -> dict[str, set[str]]:
 def diff_reachable_closure(repo: str, diff_files: list[str], *, max_hops: int = 4) -> list[str]:
     """从 diff 文件出发沿 python 调用图 BFS 取可达函数闭包（审查重点 5）。
 
-    返回闭包内文件列表（以相对/绝对路径字符串）。非 python 仓库退化为 diff_files 本身。
+    返回闭包内文件列表（带 diff_files 本身）。非 python 仓库退化为 diff_files。
     """
+    def _norm(p: str) -> str:
+        # 统一为绝对路径字符串，号栈（symlink/./ 归一在 resolve）
+        pp = Path(p)
+        if not pp.is_absolute():
+            pp = Path(repo) / p
+        return str(pp.resolve())
+
+    diff_abs = {(_norm(df), df) for df in diff_files}
+
     langs = detect_languages(repo)
     if not any(l in ("python",) for l in langs):
         return list(diff_files)
@@ -93,9 +102,9 @@ def diff_reachable_closure(repo: str, diff_files: list[str], *, max_hops: int = 
     frontier: list[str] = []
     for node in graph:
         path_part = node.rsplit(":", 1)[0]
-        for df in diff_files:
-            if path_part.endswith(df) or df.endswith(path_part):
-                frontier.append(node)
+        p_abs = str(Path(path_part).resolve())
+        if any(p_abs == a for a, _df in diff_abs):
+            frontier.append(node)
     seen: set[str] = set(frontier)
     hops = 0
     while frontier and hops < max_hops:
@@ -109,7 +118,7 @@ def diff_reachable_closure(repo: str, diff_files: list[str], *, max_hops: int = 
                         nxt.append(n)
         frontier = nxt
         hops += 1
-    closure_files = sorted({n.rsplit(":", 1)[0] for n in seen})
+    closure_files = sorted({Path(n.rsplit(":", 1)[0]).name for n in seen if ":" in n})
     out = list(dict.fromkeys([*diff_files, *closure_files]))
     return out
 
