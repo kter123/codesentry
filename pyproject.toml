@@ -38,3 +38,7 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = [
+    "live: 真实 LLM/API 通道测试，显式 -m live 调用（网络依赖，CI 默认跳过）",
+]

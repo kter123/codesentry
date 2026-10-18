@@ -13,9 +13,11 @@ def test_graph_runs_full_chain(tmp_path, monkeypatch):
     repo.mkdir()
     (repo / "app.py").write_text("x = 1\n")
     # mock LLM 配置，避免 runtime 未配置报错
+    # graph 测试注入 stub LLM —— get_settings 的真 env 被覆盖为无效占位
     monkeypatch.setenv("CODESENTRY_MODEL_BASE_URL", "http://127.0.0.1:59999/v1")
     monkeypatch.setenv("CODESENTRY_FAST_MODEL", "f")
     monkeypatch.setenv("CODESENTRY_DEEP_MODEL", "d")
+    monkeypatch.setenv("CODESENTRY_MODEL_API_KEY", "")
 
     holder = {"scan_id": 0, "budget": None}
     g = build_graph(

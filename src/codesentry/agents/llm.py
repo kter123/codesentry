@@ -27,11 +27,15 @@ class LLMClient:
 
     @classmethod
     def from_config(cls) -> "LLMClient":
+        from codesentry.config import get_settings
+
+        s = get_settings()
         return cls(
-            base_url=os.environ.get("CODESENTRY_MODEL_BASE_URL", ""),
-            api_key=os.environ.get("CODESENTRY_MODEL_API_KEY", ""),
-            fast_model=os.environ.get("CODESENTRY_FAST_MODEL", ""),
-            deep_model=os.environ.get("CODESENTRY_DEEP_MODEL", ""),
+            base_url=s.model_base_url,
+            api_key=s.model_api_key,
+            fast_model=s.fast_model,
+            deep_model=s.deep_model,
+            temperature=s.temperature,
         )
 
     def complete(self, system: str, user: str, model_role: str = "deep") -> str:

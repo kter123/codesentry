@@ -30,6 +30,10 @@ def test_state_fields_complete():
 
 def test_llm_requires_config(monkeypatch):
     _clean(monkeypatch)
+    # settings 可能从 .env 读到配置——显式封空环境变量保证「未配置」前提
+    monkeypatch.setenv("CODESENTRY_MODEL_BASE_URL", "")
+    monkeypatch.setenv("CODESENTRY_FAST_MODEL", "")
+    monkeypatch.setenv("CODESENTRY_DEEP_MODEL", "")
     with pytest.raises(LLMError, match="LLM"):
         LLMClient.from_config()
 
