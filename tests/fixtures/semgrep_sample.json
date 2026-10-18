@@ -1,0 +1,22 @@
+{
+  "results": [
+    {"check_id": "test-rule-low",
+     "path": "app.py",
+     "start": {"line": 10, "col": 3},
+     "end": {"line": 12, "col": 5},
+     "extra": {
+       "message": "matches rule low",
+       "severity": "WARNING",
+       "metadata": {"cwe": "CWE-918: Server-Side Request Forgery (SSRF)"}
+     }},
+    {"check_id": "test-rule-high",
+     "path": "app.py",
+     "start": {"line": 20, "col": 3},
+     "end": {"line": 21, "col": 9},
+     "extra": {
+       "message": "matches rule high",
+       "severity": "ERROR",
+       "metadata": {"cwe": "CWE-78: Improper Neutralization of Special Elements used in an OS Command"}
+     }}
+  ]
+}
