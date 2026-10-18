@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -40,12 +41,21 @@ def init_db(dry_run: bool = typer.Option(False, "--dry-run", help="只打印 DDL
 
 
 def scan_cmd(
-    oss: bool = typer.Option(False, "--oss", help="声明目标为开源代码（许可 Gate，M1 生效）"),
+    repo: str = typer.Argument("", help="目标仓库路径"),
+    oss: bool = typer.Option(False, "--oss", help="声明目标为开源代码（许可 Gate，FR-3）"),
+    out: str = typer.Option("", "--out", help="报告输出目录（默认 <repo>/codesentry-report）"),
     skills: str = typer.Option(
         "", "--skills", help="本次扫描临时启用的 Skill 名单，逗号分隔（M3 生效）"
     ),
 ) -> None:
-    raise typer.Exit(_not_implemented("scan"))
+    from codesentry.scan_orchestrator import run_scan
+
+    if not repo:
+        typer.echo("用法：codesentry scan <repo> [--oss] [--out DIR]", err=True)
+        raise typer.Exit(2)
+    out_dir = out or str(Path(repo) / "codesentry-report")
+    code = run_scan(repo=repo, OSS=oss, out_dir=out_dir)
+    raise typer.Exit(code)
 
 
 def diff_cmd(

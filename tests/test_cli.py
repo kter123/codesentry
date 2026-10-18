@@ -6,7 +6,7 @@ import codesentry.cli as cli_mod
 runner = CliRunner()
 
 ALL_COMMANDS = ["init-db", "scan", "diff", "report", "kb", "engines", "agents", "skills"]
-PLACEHOLDER_COMMANDS = ["scan", "diff", "report", "kb", "agents", "skills"]
+PLACEHOLDER_COMMANDS = ["diff", "report", "kb", "agents", "skills"]
 
 
 @pytest.mark.parametrize("cmd", ALL_COMMANDS)
