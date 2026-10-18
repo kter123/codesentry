@@ -47,5 +47,5 @@ def test_build_context_block_caps_and_warns():
 def test_total_cap_warns():
     big1 = Skill(name="b1", description="", body="y" * 40000, body_tokens_est=20000)
     big2 = Skill(name="b2", description="", body="z" * 40000, body_tokens_est=20000)
-    block, warnings = build_context_block([big1, big2], max_total=32768)
+    _block, warnings = build_context_block([big1, big2], max_total=32768)
     assert any("总量上限" in w for w in warnings)

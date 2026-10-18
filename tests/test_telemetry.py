@@ -66,9 +66,8 @@ def test_node_run_ok_row_written(_db, _fake_scan):
 
 
 def test_node_run_error_recorded_and_reraised(_db, _fake_scan):
-    with pytest.raises(RuntimeError):
-        with node_run(_fake_scan, "triage"):
-            raise RuntimeError("boom-triage")
+    with pytest.raises(RuntimeError), node_run(_fake_scan, "triage"):
+        raise RuntimeError("boom-triage")
     from codesentry.db.pool import get_conn
 
     with get_conn() as conn, conn.cursor() as cur:

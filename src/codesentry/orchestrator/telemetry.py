@@ -2,7 +2,7 @@
 
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from codesentry.db.pool import get_conn
 
@@ -11,18 +11,18 @@ from codesentry.db.pool import get_conn
 def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0):
     """上下文管理器：进入记 start，退出算 duration 并落 node_runs。异常也落 error。"""
     started = time.monotonic()
-    start_at = datetime.now(timezone.utc)
+    start_at = datetime.now(UTC)
     status = "ok"
     error = ""
     try:
         yield
-    except Exception as e:  # noqa: BLE001 - 遥测必须捕获以记录 error 状态，随后原样上抛
+    except Exception as e:
         status = "failed"
         error = str(e)[:500]
         raise
     finally:
         duration_ms = int((time.monotonic() - started) * 1000)
-        ended_at = datetime.now(timezone.utc)
+        ended_at = datetime.now(UTC)
         try:
             with get_conn() as conn:
                 conn.execute(

@@ -32,7 +32,7 @@ def seed_prompts_to_db() -> int:
                 )
                 n += 1
             conn.commit()
-    except Exception:  # noqa: BLE001, S110 - 无库时静默（init-db 由 CLI 引导）
+    except Exception:  # noqa: BLE001, S110 - 无库时静默（init-db 由 CLI 引导；load_prompt 亦有回退路径）
         pass
     return n
 
@@ -49,6 +49,6 @@ def load_prompt(agent: str) -> tuple[str, int | None, bool]:
             row = cur.fetchone()
             if row:
                 return str(row[1]), int(row[0]), False
-    except Exception:  # noqa: BLE001 - DB 不可用回退种子（§10）
+    except Exception:  # noqa: BLE001, S110 - DB 不可用回退种子（§10）
         pass
     return SEED_PROMPTS[agent], None, True

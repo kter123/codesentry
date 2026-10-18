@@ -25,7 +25,9 @@ _ENTRY_HINTS = ("Router", "route", "@app.", "Handler", "Controller", "Blueprint"
 
 def detect_frameworks(repo: str) -> list[str]:
     found: list[str] = []
-    for _lang, sigs in FRAMEWORK_SIGS.items():
+    for sigs in FRAMEWORK_SIGS.values():
+        if not isinstance(sigs, dict):  # 防御：sigs 结构应为 dict
+            continue
         for fname, fw_name in sigs.items():
             if (Path(repo) / fname).exists():
                 found.append(fw_name or fname)
