@@ -35,7 +35,7 @@ class BudgetGuard:
                     (self.scan_id, tokens, tool_calls, cost_usd, phase),
                 )
                 conn.commit()
-        except Exception:  # noqa: BLE001 - 台账失败不阻塞主流程（M3 单机单写、真实异常仅断连）
+        except Exception:  # noqa: BLE001, S110 - 台账失败不阻塞主流程（M3 单机单写、真实异常仅断连；主流程 status 已有 budget 复本）
             pass
 
     def phase_now(self) -> BudgetPhase:
