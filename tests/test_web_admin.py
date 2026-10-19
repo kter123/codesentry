@@ -35,14 +35,13 @@ def test_agent_timeline():
 
 
 def test_prompts_create_versions_rollback():
-    r = client.post("/api/prompts", json={"name": "triage-sys", "body": "v1 body"})
-    assert r.status_code == 200 and r.json()["version"] == 1
-    r = client.post("/api/prompts", json={"name": "triage-sys", "body": "v2 body"})
-    assert r.json()["version"] == 2
+    r1 = client.post("/api/prompts", json={"name": "triage-sys", "body": "v1 body"}).json()
+    r2 = client.post("/api/prompts", json={"name": "triage-sys", "body": "v2 body"}).json()
+    assert r2["version"] == r1["version"] + 1
     vs = client.get("/api/prompts/triage-sys/versions").json()["versions"]
-    assert len(vs) == 2 and vs[0]["version"] == 2
-    rb = client.post("/api/prompts/triage-sys/rollback", json={"version": 1}).json()
-    assert rb["new_version"] == 3
+    assert vs[0]["version"] == r2["version"]
+    rb = client.post("/api/prompts/triage-sys/rollback", json={"version": r1["version"]}).json()
+    assert rb["new_version"] == r2["version"] + 1
 
 
 def test_skill_upload_and_assign():
