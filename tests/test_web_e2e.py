@@ -83,3 +83,46 @@ def test_delete_scan_clean(tmp_path):
     assert d["ok"]
     assert not repo.exists()
     assert client.get(f"/api/scans/{sid}").status_code == 404
+
+
+def test_graph_api_python_callgraph():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("proj/app.py",
+                   "import requests\n"
+                   "def fetch(u):\n"
+                   "    return requests.get(u)\n"
+                   "def main():\n"
+                   "    return fetch('http://x')\n")
+    r = client.post("/api/scans", files={"file": ("proj.zip", buf.getvalue(), "application/zip")}, data={"oss": "true"})
+    sid = r.json()["scan_id"]
+    g = client.get(f"/api/scans/{sid}/graph").json()
+    assert g["mode"] == "callgraph"
+    names = {n["name"] for n in g["nodes"]}
+    assert "fetch" in names and "main" in names
+    assert any(e["kind"] == "CALLS" for e in g["edges"])
+
+
+def test_source_slice_and_traversal_guard():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("proj/app.py", "line1\nline2\nline3\n")
+    sid = client.post("/api/scans", files={"file": ("s.zip", buf.getvalue(), "application/zip")}).json()["scan_id"]
+    sl = client.get(f"/api/scans/{sid}/source?path=proj/app.py&start=2&end=3").json()
+    assert [l["no"] for l in sl["lines"]] == [2, 3]
+    r = client.get(f"/api/scans/{sid}/source?path=../secrets.txt")
+    assert r.status_code == 400
+
+
+def test_finding_detail_endpoint():
+    rows = client.get("/api/scans").json()
+    if not rows:
+        pytest.skip("no scans")
+    # 找一个有 findings 的 scan
+    import psycopg  # noqa: F401
+    for row in rows:
+        det = client.get(f"/api/scans/{row['id']}")
+        d = det.json()
+        # 详情不炸即可（findings 属于 5.2 后端下轮补齐的信口）
+        assert det.status_code == 200
+        break

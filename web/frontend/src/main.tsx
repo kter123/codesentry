@@ -4,6 +4,7 @@ import { ConfigProvider, Layout, Menu, Typography } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import ScansPage from './pages/ScansPage'
 import ScanDetail from './pages/ScanDetail'
+import ReviewPage from './pages/ReviewPage'
 
 const { Header, Sider, Content } = Layout
 
@@ -11,6 +12,7 @@ const App: React.FC = () => {
   const route = window.location.pathname
   let page: React.ReactNode = <ScansPage />
   if (route.startsWith('/scans/')) page = <ScanDetail id={Number(route.split('/')[2])} />
+  if (route.startsWith('/review/')) page = <ReviewPage scanId={Number(route.split('/')[2])} />
   return (
     <ConfigProvider locale={zhCN}>
       <Layout style={{ minHeight: '100vh' }}>

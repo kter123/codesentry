@@ -22,7 +22,14 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
 
+# M5.2 图审阅 API（graph/source/finding 详情）
+from codesentry.web import graph_api  # noqa: E402,F401
+
 WORK_ROOT = Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
+
+
+def _work_root() -> Path:
+    return Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
 MAX_UPLOAD = 500 * 1024 * 1024
 ALLOWED_ZIP = {".zip", ".tar", ".gz", ".tgz"}
 
@@ -130,9 +137,9 @@ async def upload_scan(
     oss: bool = False,
     bg: BackgroundTasks = None,
 ):
-    WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    _work_root().mkdir(parents=True, exist_ok=True)
     job = uuid.uuid4().hex[:10]
-    dest = WORK_ROOT / job
+    dest = _work_root() / job
     dest.mkdir(parents=True, exist_ok=True)
 
     if file is not None and file.filename:
@@ -317,7 +324,7 @@ async def delete_scan(scan_id: int) -> dict:
     repo = Path(row[0])
     # 只清理 work/ 内目录（防路径穿越）
     resolved = repo.resolve()
-    if WORK_ROOT.resolve() in resolved.parents:
+    if _work_root().resolve() in resolved.parents:
         shutil.rmtree(resolved, ignore_errors=True)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM findings WHERE scan_id=%s", (scan_id,))
@@ -334,4 +341,4 @@ async def root() -> dict:
 
 
 def cleanup_mtime_cache() -> None:  # pragma: no cover
-    shutil.rmtree(WORK_ROOT / ".tmp", ignore_errors=True)
+    shutil.rmtree(_work_root() / ".tmp", ignore_errors=True)
