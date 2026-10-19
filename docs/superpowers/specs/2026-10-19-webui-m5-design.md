@@ -15,6 +15,8 @@ v1 WebUI 是 LLM 多 agent 代码审计**工作台**，CLI 并存不动。六个
 7. 规则管理：规则列表（命中统计）、YAML 编辑+`semgrep --validate` 代理、单规则试跑 preview、规则集版本化与回滚、扫描记录 rule_set_version
 8. 复核队列：interrupted 扫描列表 → 逐条通过/驳回/调置信度 → resume 闭环
 9. 拓展（全入 v1）：污点链 replay 动画、节点右键「问AI」（RAG+LLM 流式）、双扫描图 diff（新增红闪/修复绿闪）
+10. **API Key 管理**：LLM（base_url/fast/deep/key）与 Embedding（base/model/key）通道的 UI 配置页；key 存 `app_settings` 表（key 值写库，UI 回显只显前 8 字符），改动后可「测试连通」（LLM 发一条 1-token 请求，Embedding 发一次 1 维调用）；配置热生效（下次扫描用新值）；日志/报告永不回显完整 key（沿用永不写日志约束）
+11. **历史扫描记录中心**：/scans 页强化——按语言/状态/CWE 筛选、关键词搜索、双选对比（同 repo 两次扫描的 finding 数量差、新出现/消失 CWE 列表）、每条记录一键下载 SARIF/MD 报告（读 out_dir 落盘文件）、失败记录显示落因（scans.error_reason）、保留策略（手动删除 = 连带 work/ 目录清理）
 
 ### R2 非功能
 - 单机模式无登录（v2）；上传大小/类型校验；切片接口防路径穿越（仅 work/{scan}/ 白名单内）；PoC 执行仍受 POC_RUN gating（UI 只展示日志不新增执行入口）；全部数据复用现有表+两处例外（rule_sets 新表、scans.rule_set_version 字段）。
@@ -60,13 +62,19 @@ GET /api/rules, /api/rules/{id}, POST /api/rules/validate, /api/rules/preview
 GET/POST /api/rulesets, /api/rulesets/{id}/rollback
 GET /api/reviews, POST /api/scans/{id}/resume
 POST /api/agent-chat
+GET/PUT /api/settings/llm        # 读 masked（key 前8字）+ 写
+POST /api/settings/llm/test      # 连通性测试
+GET/PUT /api/settings/embedding  POST /api/settings/embedding/test
+DELETE /api/scans/{id}           # 删除记录 + work/ 清理
+GET  /api/scans/compare?a=&b=    # 历史对比
 WS  /ws/scans/{id}
 ```
 
 ## 四、Schema 例外
 
 - 新表 `rule_sets(name, version, body, body_sha256, created_at)`（复用 skill_versions 同构）
-- `scans` 加列 `rule_set_version TEXT DEFAULT ''`
+- 新表 `app_settings(key TEXT PRIMARY KEY, value TEXT)` —— LLM/Embedding 运行时配置（含 key；key 提供 PUT 覆盖、GET 掩码）
+- `scans` 加列 `rule_set_version TEXT DEFAULT ''`、`error_reason TEXT DEFAULT ''`
 
 ## 五、里程碑
 
