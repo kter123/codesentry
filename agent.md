@@ -314,5 +314,6 @@ flowchart TD
 | M2 数据与 RAG | ✅ 完成 | doc/2026-10-18-m2-data-rag-plan.md | pgvector 双库+混合检索（中文 FTS 命中实测）；kb import 幂等；Embedding 双通道 | c37b332…5432030 |
 | M3 多 agent 流水线 | ✅ 完成 | doc/2026-10-18-m3-multiagent-plan.md | LangGraph 六节点全链 CLI 端到端（scan_id=32 全 node_runs ok、findings 落库、snapshot 落盘）；human_review interrupt+resume；diff 闭包；PoC 三档+POC_RUN gating+危险 payload 拒绝；120+ tests 绿 | 785edc6…4e339a5 |
 | M3.5 RAG 五库+GraphRAG | 未开始 | 待编排 | — | — |
+| M5 WebUI | ✅ 完成（v1 全面板） | docs/superpowers/specs/2026-10-19-webui-m5-design.md | FastAPI+React+AntD 三源上传（zip 防穿越/git https/粘贴diff）+后台 graph 全链+WS 时间线；图审阅页（G6 callgraph/源码切片/污点播放/CWE过滤）；agent 控制台+Prompt/Skill/规则管理（validate/版本化/回滚）+复核队列 resume+settings API key 管理（掩码+连通测试）；web 测试 37 绿（e2e+admin），全套 147 | （本 commit） |
 | M4 质量评测 | ✅ 完成（v1 口径：semgrep+LLM triage denoise） | doc/m4-bench-report.md | 自建六语言 24 样例（15真/9净）引擎层+全链零漏报零误报；OWASP BenchmarkJava 抽样 106 例 recall 91%；真仓降噪 cryptography 86% / zaproxy 56% / DVWA 安全实现正确 REJECT；`codesentry bench`/`bench-top` 命令；LLM token 回流 budget_ledger；bge-m3 部署挂载盘（ollama 1024维实测） | c613025…（本 commit） |
 | M5 WebUI | 未开始（设计需求已收集：图交互完整性/污点链联动/agent 可视化/PoC 链路四验证点已确认） | — | — | — |
