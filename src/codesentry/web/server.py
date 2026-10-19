@@ -24,6 +24,8 @@ app.add_middleware(
 
 # M5.2 图审阅 API（graph/source/finding 详情）
 from codesentry.web import graph_api  # noqa: E402,F401
+# M5.3 管理面板 API
+from codesentry.web import admin_api  # noqa: E402,F401
 
 WORK_ROOT = Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
 
