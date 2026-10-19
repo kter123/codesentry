@@ -3,7 +3,9 @@ CHECKPOINT_SCHEMA = "langgraph"
 
 
 def render_ddl() -> str:
-    """M0 DDL 骨架：业务/checkpoint 双 schema + pgvector 扩展。表 DDL 由 M1+ 增量追加。"""
+    """业务/checkpoint 双 schema + pgvector 扩展 + 全部表 DDL（db.ddl.render_full_ddl）。"""
+    from codesentry.db.ddl import render_full_ddl
+
     return (
         "\n".join(
             [
@@ -13,4 +15,5 @@ def render_ddl() -> str:
             ]
         )
         + "\n"
+        + render_full_ddl()
     )
