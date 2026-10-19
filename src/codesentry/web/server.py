@@ -217,6 +217,18 @@ async def get_scan(scan_id: int) -> dict:
 # 静态托管（M5.2 起接入 React build；骨架期占位）
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
+    # 顶层 SPA 路由直达（/agents /rules /skills /prompts /reviews /scans…——不带 /ui 也行）
+    _SPA_SEGMENTS = {"agents", "rules", "skills", "prompts", "reviews", "scans", "review"}
+
+    @app.get("/{spa_path:path}")
+    async def root_fallback(spa_path: str):
+        first = spa_path.split("/")[0] if spa_path else ""
+        if spa_path.startswith("api/") or spa_path.startswith("docs") or spa_path.startswith("assets/"):
+            raise HTTPException(404)
+        if first in _SPA_SEGMENTS or spa_path == "":
+            return FileResponse(STATIC_DIR / "index.html")
+        raise HTTPException(404)
+
     # SPA 路由回退：/ui/* 非 API 非资产路径统一回 index.html（前端 /agents 等直链直接可用）
     @app.get("/ui/{full_path:path}")
     async def spa_fallback(full_path: str):
