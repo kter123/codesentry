@@ -217,6 +217,13 @@ async def get_scan(scan_id: int) -> dict:
 # 静态托管（M5.2 起接入 React build；骨架期占位）
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
+    # SPA 路由回退：/ui/* 非 API 非资产路径统一回 index.html（前端 /agents 等直链直接可用）
+    @app.get("/ui/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        asset = STATIC_DIR / full_path
+        if full_path.startswith("assets/") and asset.is_file():
+            return FileResponse(asset)
+        return FileResponse(STATIC_DIR / "index.html")
     app.mount("/ui", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
 
 
