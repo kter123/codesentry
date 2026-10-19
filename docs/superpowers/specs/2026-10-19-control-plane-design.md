@@ -21,6 +21,54 @@ Postgres（业务 schema）+ LangGraph（业务 schema checkpoint）
 1. **可复现**：每次扫描固定 `llm_profile_id + prompt_versions + skill_versions + rule_set + graph_template_version`，写入 `scans.*_snapshot` 与 `agent_artifacts`。
 2. **可审计**：所有配置写操作进 `config_audit`，密钥只写不读（读接口永远掩码）。
 
+## 1.5 LangGraph 运行时内核（至关重要）
+
+控制面不自己实现编排语义，全部落在 LangGraph 原生能力上：
+
+| LangGraph 能力 | 平台用法 |
+|---|---|
+| `StateGraph` + `TypedDict` 状态 | `AuditState` 为唯一事实源；控制台编排模板编译为 StateGraph |
+| `add_conditional_edges` / `Command` | triage→retrieval 补查、deploy 失败→poc、失败重熔断 |
+| `interrupt()` + `Command(resume=...)` | 人工复核队列；复核人决策回灌图中断点 |
+| `PostgresSaver` checkpointer | 崩溃恢复、断点续跑、审计链基线 |
+| `get_state_history` / `update_state` | 扫描时间旅行、节点回放、人工修正状态后继续 |
+| `Send` API | 按 finding 并行 fan-out triage / PoC，替代串行循环 |
+| `RetryPolicy` / `timeout` | 每个节点独立重试与超时，替代手写退避 |
+| 子图（subgraph） | 每个 Agent 可注册为子图（含自己的工具循环），主图只依赖接口 |
+| `astream(stream_mode=["updates","custom","values","messages"])` | WebSocket 实时推送节点开始/结束/token/中断事件 |
+| `PostgresStore` / `BaseStore` | 长期记忆：历史 finding、KB、skill 检索；跨扫描复用 |
+| `langgraph.json` + LangGraph Studio | 开发期可视化调试图；CI 快照回归 |
+| `InMemorySaver` | 单测不依赖 Postgres |
+
+**实现约束**
+
+1. 节点函数保持 `state -> partial update`；副作用（DB、Docker、HTTP）只在节点内部，便于回放。
+2. 所有节点经 `node_run` 遥测包装，产出 `node_runs` + `agent_artifacts`；artifacts 的 `prev_sha256` 链与 checkpoint 双轨，审计可交叉校验。
+3. 人工复核使用 `interrupt()` 而不是轮询表；`/api/scans/{id}/resume` 即 `Command(resume=decisions)`。
+4. 编排模板只允许调整节点启停、边与重试上限，不允许注入任意代码；未知节点拒绝编译。
+5. 流式事件统一映射为 UI 事件：`node.start / node.end / llm.token / message / interrupt / error / done`。
+6. 长任务默认 `durability="async"`；人工复核与 PoC 执行使用 `"sync"`，确保中断前落盘。
+
+**新增模块**
+
+```
+src/codesentry/orchestrator/
+  graph.py        模板 → StateGraph 编译（含 Send、子图、条件边）
+  registry.py     节点注册表（agent 名 → 可调用对象 + 元数据）
+  streaming.py    astream_events → WS 事件泵
+  replay.py       get_state_history / update_state / 节点回放
+  store.py        PostgresStore 长期记忆（KB、历史 finding、skills 索引）
+```
+
+**验收**
+
+- 删除任一节点（除 recon/scan/report）后仍可编译并跑通，`node_runs` 标记 skipped；
+- 人工复核中断后重启进程仍能 resume（checkpointer 生效）；
+- `get_state_history` 能列出每次节点更新，UI 时间旅行可回到任一 checkpoint；
+- triage 对 20 条 finding 使用 `Send` 并行，墙钟时间显著低于串行（记录对比）；
+- WS 能收到完整事件序列，前端时间线不依赖轮询。
+
+
 ## 2. 身份、租户与权限
 
 ### 2.1 数据模型
