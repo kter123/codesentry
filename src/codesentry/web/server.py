@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import shutil
+import socket
+import tarfile
 import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    Form,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,9 +36,15 @@ app.add_middleware(
 )
 
 # M5.2 图审阅 API（graph/source/finding 详情）
-from codesentry.web import graph_api  # noqa: E402,F401
 # M5.3 管理面板 API
-from codesentry.web import admin_api  # noqa: E402,F401
+# M6.1 控制平面 API
+# M6.1 认证中间件与 API（可开关）
+from codesentry.web import (
+    admin_api,  # noqa: F401
+    auth_api,  # noqa: F401
+    control_api,  # noqa: F401
+    graph_api,  # noqa: F401
+)
 
 WORK_ROOT = Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
 
@@ -33,7 +52,77 @@ WORK_ROOT = Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
 def _work_root() -> Path:
     return Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
 MAX_UPLOAD = 500 * 1024 * 1024
-ALLOWED_ZIP = {".zip", ".tar", ".gz", ".tgz"}
+MAX_DIFF = 5 * 1024 * 1024
+MAX_ENTRIES = 10_000
+ALLOWED_ARCHIVE = (".zip", ".tar", ".tar.gz", ".tgz")
+
+
+def _bad_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(
+        (
+            ip.is_private, ip.is_loopback, ip.is_link_local,
+            ip.is_reserved, ip.is_unspecified, ip.is_multicast,
+        )
+    )
+
+
+def _validate_git_url(git_url: str) -> str:
+    parsed = urlparse(git_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        raise HTTPException(400, "git_url must be https")
+    if host in {"localhost"} or host.endswith(".local"):
+        raise HTTPException(400, "git host not allowed")
+    try:
+        ip = ipaddress.ip_address(host)
+        if _bad_ip(ip):
+            raise HTTPException(400, "git host not allowed")
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError as e:
+            raise HTTPException(400, "git host resolve failed") from e
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if _bad_ip(ip):
+                raise HTTPException(400, "git host resolves to private address")
+    return git_url
+
+
+def _safe_extract(archive_path: Path, kind: str, dest: Path) -> None:
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(archive_path) as z:
+                infos = z.infolist()
+                if len(infos) > MAX_ENTRIES:
+                    raise HTTPException(400, "archive has too many entries")
+                if sum(i.file_size for i in infos) > MAX_UPLOAD * 3:
+                    raise HTTPException(400, "archive expands too large")
+                names = z.namelist()
+                if any(n.startswith("/") or ".." in Path(n).parts for n in names):
+                    raise HTTPException(400, "archive contains unsafe path")
+                z.extractall(dest)
+        else:
+            with tarfile.open(archive_path) as t:
+                members = t.getmembers()
+                if len(members) > MAX_ENTRIES:
+                    raise HTTPException(400, "archive has too many entries")
+                if sum(m.size for m in members) > MAX_UPLOAD * 3:
+                    raise HTTPException(400, "archive expands too large")
+                for m in members:
+                    if m.name.startswith("/") or ".." in Path(m.name).parts:
+                        raise HTTPException(400, "archive contains unsafe path")
+                    if m.issym() or m.islnk():
+                        raise HTTPException(400, "archive links not allowed")
+                try:
+                    t.extractall(dest, filter="data")
+                except TypeError:  # pragma: no cover - Python < 3.12
+                    t.extractall(dest)
+    except (zipfile.BadZipFile, tarfile.TarError) as e:
+        raise HTTPException(400, f"bad archive: {e}") from e
 
 
 class ScanOut(BaseModel):
@@ -46,10 +135,23 @@ class ScanOut(BaseModel):
 
 
 def _insert_scan(repo_path: str, oss: bool) -> int:
+    from codesentry.control.snapshots import build_scan_snapshot, snapshot_json
+
+    snapshot = build_scan_snapshot()
+    prompt_snap, skill_snap, llm_snap = snapshot_json(snapshot)
+    profile_ids = [
+        v.get("profile_id") for v in snapshot.get("llm_snapshot", {}).values() if v.get("profile_id")
+    ]
+    default_pid = int(profile_ids[0]) if profile_ids else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO scans (repo_path, license_oss, license_declared_at, mode, status) VALUES (%s,%s,%s,'full','running') RETURNING id",
-            (repo_path, oss, datetime.now(UTC)),
+            "INSERT INTO scans (repo_path, license_oss, license_declared_at, mode, status,"
+            " prompt_snapshot, skill_snapshot, llm_snapshot, llm_profile_id, graph_snapshot)"
+            " VALUES (%s,%s,%s,'full','running',%s,%s,%s,%s,%s) RETURNING id",
+            (
+                repo_path, oss, datetime.now(UTC), prompt_snap, skill_snap, llm_snap,
+                default_pid, '{"template": "default", "version": 1}',
+            ),
         )
         scan_id = cur.fetchone()[0]
         conn.commit()
@@ -63,11 +165,42 @@ def _run_scan_bg(scan_id: int, repo: str, oss: bool, out_dir: str) -> None:
     t.start()
 
 
+def _notify(event: str, payload: dict) -> None:
+    import threading
+
+    def run() -> None:
+        try:
+            from codesentry.control.webhooks import dispatch
+
+            dispatch(event, payload)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _scan_worker(scan_id: int, repo: str, oss: bool, out_dir: str) -> None:
     from codesentry.orchestrator.runner import run_scan_graph
 
-    code = run_scan_graph(repo=repo, OSS=oss, out_dir=out_dir)
-    _broadcast(scan_id, {"event": "scan_done", "ok": code == 0, "scan_id": scan_id})
+    try:
+        code = run_scan_graph(repo=repo, OSS=oss, out_dir=out_dir, scan_id=scan_id)
+        _broadcast(scan_id, {"event": "scan_done", "ok": code == 0, "scan_id": scan_id})
+        _notify("scan.completed" if code == 0 else "scan.failed",
+                {"scan_id": scan_id, "repo": repo, "ok": code == 0})
+    except Exception as e:  # noqa: BLE001 - 后台线程异常必须回填失败状态
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE scans SET status='failed', error_reason=%s WHERE id=%s",
+                    (str(e)[:500], scan_id),
+                )
+                conn.commit()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        _broadcast(scan_id, {"event": "scan_done", "ok": False, "scan_id": scan_id,
+                             "error": str(e)[:200]})
+        _notify("scan.failed", {"scan_id": scan_id, "repo": repo, "ok": False,
+                                "error": str(e)[:200]})
 
 
 class _Hub:
@@ -114,7 +247,7 @@ async def _start_pump() -> None:
                     for ws in list(cons):
                         try:
                             await ws.send_text(_json.dumps(payload) if isinstance(payload, dict) else payload)
-                        except Exception:  # noqa: BLE001, S110
+                        except Exception:  # noqa: BLE001
                             hub.leave(sid, ws)
             await asyncio.sleep(0.5)
 
@@ -123,6 +256,18 @@ async def _start_pump() -> None:
 
 @app.websocket("/ws/scans/{scan_id}")
 async def ws_scan(scan_id: int, ws: WebSocket) -> None:
+    from codesentry.config import get_settings
+
+    if get_settings().auth_enabled:
+        from codesentry.control import auth
+
+        user = auth.resolve_identity(
+            ws.headers.get("authorization"), ws.cookies.get(auth.COOKIE_NAME)
+        )
+        if not user or not auth.role_ok(user, "viewer", "GET", f"/api/scans/{scan_id}"):
+            await ws.accept()
+            await ws.close(code=4401)
+            return
     await hub.join(scan_id, ws)
     try:
         while True:
@@ -137,7 +282,7 @@ async def upload_scan(
     git_url: str = "",
     diff_text: str = Form(""),
     oss: bool = False,
-    bg: BackgroundTasks = None,
+    bg: BackgroundTasks = None,  # type: ignore[assignment]
 ):
     _work_root().mkdir(parents=True, exist_ok=True)
     job = uuid.uuid4().hex[:10]
@@ -145,98 +290,160 @@ async def upload_scan(
     dest.mkdir(parents=True, exist_ok=True)
 
     if file is not None and file.filename:
-        ext = Path(file.filename).suffix.lower()
-        if ext not in ALLOWED_ZIP:
-            raise HTTPException(400, f"unsupported archive type {ext}")
-        data = await file.read()
-        if len(data) > MAX_UPLOAD:
-            raise HTTPException(413, "upload too large")
-        archive_path = dest / file.filename
-        archive_path.write_bytes(data)
-        if ext == ".zip":
-            try:
-                with zipfile.ZipFile(archive_path) as z:
-                    names = z.namelist()
-                    if any(n.startswith("/") or ".." in n for n in names):
-                        raise HTTPException(400, "zip contains unsafe path")
-                    z.extractall(dest / "src")
-            except zipfile.BadZipFile as e:
-                raise HTTPException(400, f"bad zip: {e}") from e
+        lower = file.filename.lower()
+        if lower.endswith(".zip"):
+            kind, ext = "zip", ".zip"
+        elif lower.endswith((".tar", ".tar.gz", ".tgz")):
+            kind, ext = "tar", (".tar.gz" if lower.endswith(".tar.gz") else Path(lower).suffix)
+        else:
+            raise HTTPException(400, "unsupported archive type")
+        archive_path = dest / ("upload" + ext)
+        total = 0
+        with archive_path.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD:
+                    out.close()
+                    archive_path.unlink(missing_ok=True)
+                    raise HTTPException(413, "upload too large")
+                out.write(chunk)
+        _safe_extract(archive_path, kind, dest / "src")
         repo = str(dest / "src")
     elif git_url:
-        if not git_url.startswith("https://"):
-            raise HTTPException(400, "git_url must be https")
+        _validate_git_url(git_url)
         import subprocess
 
-        r = subprocess.run(
-            ["git", "clone", "--depth", "1", git_url, str(dest / "src")],
-            capture_output=True, text=True, timeout=600,
-        )
+        try:
+            r = await run_in_threadpool(
+                subprocess.run,
+                ["git", "clone", "--depth", "1", "--single-branch", "--no-tags",
+                 git_url, str(dest / "src")],
+                capture_output=True, text=True, timeout=120, check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise HTTPException(400, "clone timed out") from e
         if r.returncode != 0:
-            raise HTTPException(400, f"clone failed: {r.stderr[:200]}")
+            raise HTTPException(400, "clone failed")
         repo = str(dest / "src")
     elif diff_text:
+        if len(diff_text) > MAX_DIFF:
+            raise HTTPException(413, "diff too large")
         (dest / "src").mkdir()
         (dest / "src" / "patch.diff").write_text(diff_text, encoding="utf-8")
         repo = str(dest / "src")
     else:
         raise HTTPException(400, "provide file / git_url / diff_text")
 
-    scan_id = _insert_scan(repo, oss)
+    try:
+        scan_id = _insert_scan(repo, oss)
+    except Exception as e:
+        raise HTTPException(503, "scan 落库失败（DB 不可用？）") from e
     out_dir = str(dest / "codesentry-report")
-    bg.add_task(_run_scan_bg, scan_id, repo, oss, out_dir)
+    if bg is not None:
+        bg.add_task(_run_scan_bg, scan_id, repo, oss, out_dir)
+    else:
+        _run_scan_bg(scan_id, repo, oss, out_dir)
     return {"scan_id": scan_id, "repo": repo, "out": out_dir}
 
 
 @app.get("/api/scans")
 async def list_scans() -> list[dict]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, repo_path, license_oss, status, mode FROM scans ORDER BY id DESC LIMIT 200")
-        cols = ["id", "repo_path", "OSS", "status", "mode"]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, repo_path, license_oss, status, mode, deploy_status, target_url"
+                " FROM scans ORDER BY id DESC LIMIT 200"
+            )
+            cols = ["id", "repo_path", "OSS", "status", "mode", "deploy_status", "target_url"]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception:  # noqa: BLE001 - DB 不可用降级为空列表
+        return []
 
 
 @app.get("/api/scans/{scan_id}")
 async def get_scan(scan_id: int) -> dict:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, repo_path, license_oss, status, mode FROM scans WHERE id=%s", (scan_id,))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(404)
-        cur.execute(
-            "SELECT node, started_at, duration_ms, tokens, status, error FROM node_runs WHERE scan_id=%s ORDER BY started_at",
-            (scan_id,),
-        )
-        timeline = [
-            {"node": n, "started": str(s), "duration_ms": d, "tokens": t, "status": st, "error": e}
-            for n, s, d, t, st, e in cur.fetchall()
-        ]
-        return dict(zip(["id", "repo_path", "OSS", "status", "mode"], row)) | {"timeline": timeline}
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, repo_path, license_oss, status, mode, deploy_status, deploy_log, target_url"
+                " FROM scans WHERE id=%s",
+                (scan_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404)
+            cur.execute(
+                "SELECT node, started_at, duration_ms, tokens, status, error FROM node_runs WHERE scan_id=%s ORDER BY started_at",
+                (scan_id,),
+            )
+            node_rows = cur.fetchall()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, "scan 查询失败（DB 不可用？）") from e
+    timeline = [
+        {"node": n, "started": str(s), "duration_ms": d, "tokens": t, "status": st, "error": e}
+        for n, s, d, t, st, e in node_rows
+    ]
+    keys = ["id", "repo_path", "OSS", "status", "mode", "deploy_status", "deploy_log", "target_url"]
+    return dict(zip(keys, row)) | {"timeline": timeline}
 
 
-# 静态托管（M5.2 起接入 React build；骨架期占位）
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-if STATIC_DIR.exists():
-    # 顶层 SPA 路由直达（/agents /rules /skills /prompts /reviews /scans…——不带 /ui 也行）
-    _SPA_SEGMENTS = {"agents", "rules", "skills", "prompts", "reviews", "scans", "review"}
-
-    @app.get("/{spa_path:path}")
-    async def root_fallback(spa_path: str):
-        first = spa_path.split("/")[0] if spa_path else ""
-        if spa_path.startswith("api/") or spa_path.startswith("docs") or spa_path.startswith("assets/"):
-            raise HTTPException(404)
-        if first in _SPA_SEGMENTS or spa_path == "":
-            return FileResponse(STATIC_DIR / "index.html")
+@app.get("/api/scans/{scan_id}/sarif")
+async def get_sarif(scan_id: int):
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT report_dir FROM scans WHERE id=%s", (scan_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(503, "scan 查询失败") from e
+    if not row:
         raise HTTPException(404)
+    report_dir = Path(str(row[0] or "")).resolve()
+    if _work_root().resolve() not in report_dir.parents:
+        raise HTTPException(404)
+    path = report_dir / "report.sarif"
+    if not path.is_file():
+        raise HTTPException(404, "SARIF 尚未生成")
+    return FileResponse(path, media_type="application/sarif+json", filename=f"scan-{scan_id}.sarif")
 
-    # SPA 路由回退：/ui/* 非 API 非资产路径统一回 index.html（前端 /agents 等直链直接可用）
-    @app.get("/ui/{full_path:path}")
-    async def spa_fallback(full_path: str):
-        asset = STATIC_DIR / full_path
-        if full_path.startswith("assets/") and asset.is_file():
-            return FileResponse(asset)
-        return FileResponse(STATIC_DIR / "index.html")
-    app.mount("/ui", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
+
+@app.post("/api/scans/{scan_id}/replay")
+async def replay_scan(scan_id: int, bg: BackgroundTasks = None) -> dict:  # type: ignore[assignment]
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT repo_path, license_oss, prompt_snapshot, skill_snapshot, llm_snapshot"
+                " FROM scans WHERE id=%s",
+                (scan_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404)
+            repo, oss, prompt_snap, skill_snap, llm_snap = row
+            job = uuid.uuid4().hex[:10]
+            out_dir = str(_work_root() / job / "codesentry-report")
+            cur.execute(
+                "INSERT INTO scans (repo_path, license_oss, license_declared_at, mode, status,"
+                " prompt_snapshot, skill_snapshot, llm_snapshot, graph_snapshot, report_dir)"
+                " VALUES (%s,%s,%s,'replay','running',%s,%s,%s,%s,%s) RETURNING id",
+                (repo, oss, datetime.now(UTC), prompt_snap, skill_snap, llm_snap,
+                 '{"template": "default", "version": 1}', out_dir),
+            )
+            new_id = int(cur.fetchone()[0])
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, "replay 创建失败") from e
+    if bg is not None:
+        bg.add_task(_run_scan_bg, new_id, str(repo), bool(oss), out_dir)
+    else:
+        _run_scan_bg(new_id, str(repo), bool(oss), out_dir)
+    return {"ok": True, "scan_id": new_id, "replayed_from": scan_id}
 
 
 # ---- Settings (API key 管理 R10) ----
@@ -272,7 +479,22 @@ async def get_settings_group(group: str) -> dict:
 
 def _read_setting(key: str) -> str:
     from codesentry.config import get_settings
+    from codesentry.security.secrets import SecretError, decrypt_secret
 
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM app_settings WHERE key=%s", (key,))
+            row = cur.fetchone()
+        if row is not None:
+            val = str(row[0])
+            if key.endswith("api_key") and val:
+                try:
+                    return decrypt_secret(val)
+                except SecretError:
+                    return ""
+            return val
+    except Exception:  # noqa: BLE001, S110
+        pass
     s = get_settings()
     return {
         "model_base_url": s.model_base_url,
@@ -296,15 +518,20 @@ async def put_settings_group(group: str, payload: SettingsPayload) -> dict:
     for k, v in payload.values.items():
         if k not in SETTING_KEYS or SETTING_KEYS[k] != group:
             raise HTTPException(400, f"unknown key {k}")
+        stored = v
+        if k.endswith("api_key") and v:
+            from codesentry.security.secrets import encrypt_secret
+
+            stored = encrypt_secret(v)
         try:
             with get_conn() as conn, conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO app_settings (key, value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=%s, updated_at=now()",
-                    (k, v, v),
+                    (k, stored, stored),
                 )
                 conn.commit()
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(500, f"settings 写库失败：{e}") from e
+        except Exception as e:
+            raise HTTPException(503, f"settings 写库失败：{e}") from e
     return {"ok": True, "keys": list(payload.values)}
 
 
@@ -314,7 +541,6 @@ async def test_settings_group(group: str) -> dict:
         if group == "llm":
             import openai
 
-            s = type("S", (), {})()
             from codesentry.config import get_settings as gs
 
             cfg = gs()
@@ -348,11 +574,21 @@ async def delete_scan(scan_id: int) -> dict:
     if _work_root().resolve() in resolved.parents:
         shutil.rmtree(resolved, ignore_errors=True)
     with get_conn() as conn, conn.cursor() as cur:
+        # 阻止后台 worker 在删除过程中继续插入子表，避免 FK 竞态
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        cur.execute("LOCK TABLE node_runs, findings, budget_ledger IN ACCESS EXCLUSIVE MODE")
         cur.execute("DELETE FROM findings WHERE scan_id=%s", (scan_id,))
         cur.execute("DELETE FROM node_runs WHERE scan_id=%s", (scan_id,))
         cur.execute("DELETE FROM budget_ledger WHERE scan_id=%s", (scan_id,))
+        cur.execute("DELETE FROM llm_usage WHERE scan_id=%s", (scan_id,))
         cur.execute("DELETE FROM scans WHERE id=%s", (scan_id,))
         conn.commit()
+    try:
+        from codesentry.sandbox.deploy import cleanup_scan
+
+        cleanup_scan(scan_id)
+    except Exception:  # noqa: BLE001, S110
+        pass
     return {"ok": True}
 
 
@@ -363,3 +599,35 @@ async def root() -> dict:
 
 def cleanup_mtime_cache() -> None:  # pragma: no cover
     shutil.rmtree(_work_root() / ".tmp", ignore_errors=True)
+
+
+# 静态托管（M5.2 起接入前端 build；骨架期占位）
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.exists():
+    _STATIC_ROOT = STATIC_DIR.resolve()
+    _assets = STATIC_DIR / "assets"
+    if _assets.is_dir():
+        # 必须先挂载，再注册 catch-all；否则 /assets/* 会被 catch-all 截获
+        app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+    _SPA_SEGMENTS = {
+        "agents", "rules", "skills", "prompts", "reviews", "scans", "review",
+        "llm", "usage", "orchestration", "audit", "settings", "users", "login",
+    }
+
+    @app.get("/{spa_path:path}")
+    async def root_fallback(spa_path: str):
+        if "\x00" in spa_path:
+            raise HTTPException(404)
+        first = spa_path.split("/")[0] if spa_path else ""
+        if spa_path == "" or first in _SPA_SEGMENTS or first == "ui":  # /agents... 与 /ui/... 都直接回 index
+            if spa_path.startswith("ui/"):
+                rel = spa_path[len("ui/"):]
+                candidate = (STATIC_DIR / rel).resolve()
+                try:
+                    candidate.relative_to(_STATIC_ROOT)
+                except ValueError as e:
+                    raise HTTPException(404) from e
+                if candidate.is_file():
+                    return FileResponse(candidate)
+            return FileResponse(STATIC_DIR / "index.html")
+        raise HTTPException(404)

@@ -2,25 +2,36 @@
 
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from codesentry.db.pool import get_conn
 
 
+@dataclass
+class NodeRun:
+    tokens: int = 0
+    tool_calls: int = 0
+
+
 @contextmanager
-def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0):
+def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
+             status_override: str | None = None):
     """上下文管理器：进入记 start，退出算 duration 并落 node_runs。异常也落 error。"""
     started = time.monotonic()
     start_at = datetime.now(UTC)
-    status = "ok"
+    status = status_override or "ok"
     error = ""
+    run = NodeRun(tokens=tokens, tool_calls=tool_calls)
     try:
-        yield
+        yield run
     except Exception as e:
         status = "failed"
         error = str(e)[:500]
         raise
     finally:
+        if status_override and status != "failed":
+            status = status_override
         duration_ms = int((time.monotonic() - started) * 1000)
         ended_at = datetime.now(UTC)
         try:
@@ -32,7 +43,7 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0):
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (scan_id, node, start_at, ended_at, duration_ms,
-                     tokens or 0, tool_calls or 0, status, error),
+                     run.tokens or 0, run.tool_calls or 0, status, error),
                 )
                 conn.commit()
         except Exception:  # noqa: BLE001, S110 - 遥测写入失败不阻塞主流程（扫描结果另落表）

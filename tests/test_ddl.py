@@ -13,6 +13,13 @@ EXPECTED_TABLES = [
     "skills",
     "skill_versions",
     "skill_assignments",
+    "rule_sets",
+    "app_settings",
+    "llm_profiles",
+    "llm_usage",
+    "config_audit",
+    "users",
+    "api_tokens",
 ]
 
 
@@ -32,3 +39,16 @@ def test_ddl_schema_boundary():
 
 def test_ddl_vector_extension():
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in render_full_ddl()
+
+
+def test_ddl_control_columns():
+    ddl = render_full_ddl()
+    for needle in (
+        "model_prefix_policy",
+        "llm_profile_id",
+        "prompt_versions_one_active",
+        "version_pin",
+        "llm_snapshot",
+        "capabilities JSONB",
+    ):
+        assert needle in ddl, needle

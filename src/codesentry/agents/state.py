@@ -28,6 +28,11 @@ class AuditState(TypedDict, total=False):
     evidence: dict  # finding_iid -> {'code_slices': [...], 'kb': [...], 'vuln_cases': [...]}
     # poc
     poc_results: dict  # finding_iid -> {exploit_chain, poc_file, verdict, execution_log}
+    # deploy（M6.2）
+    deploy_status: str
+    deploy_log: str
+    target_url: str
+    deploy: dict
     # 预算
     budget: dict  # {tokens, tool_calls, cost_usd, phase: ok|warn|breach}
     # 可复现（NFR-2）
@@ -53,6 +58,10 @@ def new_state(repo_path: str, OSS: bool, scan_id: int | None = None) -> AuditSta
         triaged_findings=[],
         evidence={},
         poc_results={},
+        deploy_status="",
+        deploy_log="",
+        target_url="",
+        deploy={},
         budget={"tokens": 0, "tool_calls": 0, "cost_usd": 0.0, "phase": "ok"},
         prompt_versions={},
         skills_snapshot={},

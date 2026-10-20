@@ -7,7 +7,6 @@
 同维度入库；`is_local` 用于数据本地化策略判断。
 """
 
-import os
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 

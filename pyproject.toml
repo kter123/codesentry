@@ -13,12 +13,15 @@ dependencies = [
     "tree-sitter>=0.26.0",
     "tree-sitter-python>=0.25.0",
     "openai>=3.35.1",
+    "httpx>=0.28",
     "langgraph>=1.2.16",
     "langchain-core>=1.6.12",
     "langgraph-checkpoint-postgres>=3.2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
+    "docker>=7.2.0",
+    "cryptography>=43",
 ]
 
 [project.scripts]
@@ -41,7 +44,11 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-m 'not live'"
 markers = [
     "live: 真实 LLM/API 通道测试，显式 -m live 调用（网络依赖，CI 默认跳过）",
 ]
+
+[tool.mypy]
+ignore_missing_imports = true

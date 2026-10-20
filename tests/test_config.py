@@ -23,7 +23,7 @@ def test_switch_defaults(monkeypatch):
     assert s.human_review is False
     assert s.temperature == 0.0
     assert s.poc_run == "off"
-    assert s.web_bind == "0.0.0.0"
+    assert s.web_bind == "127.0.0.1"
     assert s.work_dir == ".codesentry"
     assert s.allow_oss_codeql is False
 

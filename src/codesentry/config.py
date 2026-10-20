@@ -34,8 +34,15 @@ class Settings(BaseSettings):
     # poc (D28, D32)
     poc_run: Literal["off", "sandbox", "target"] = "off"
 
-    # web (D36)
-    web_bind: str = "0.0.0.0"
+    # M6.2 sandbox deploy
+    deploy_timeout_s: int = 120
+    deploy_mem_mb: int = 512
+    deploy_cpu: float = 1.0
+
+    # web (D36 修订：默认仅回环；绑定外部地址需显式配置认证)
+    web_bind: str = "127.0.0.1"
+    secret_key: str = ""
+    auth_enabled: bool = False
 
     # human review (FR-9)
     human_review: bool = False

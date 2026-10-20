@@ -316,4 +316,11 @@ flowchart TD
 | M3.5 RAG 五库+GraphRAG | 未开始 | 待编排 | — | — |
 | M5 WebUI | ✅ 完成（v1 全面板） | docs/superpowers/specs/2026-10-19-webui-m5-design.md | FastAPI+React+AntD 三源上传（zip 防穿越/git https/粘贴diff）+后台 graph 全链+WS 时间线；图审阅页（G6 callgraph/源码切片/污点播放/CWE过滤）；agent 控制台+Prompt/Skill/规则管理（validate/版本化/回滚）+复核队列 resume+settings API key 管理（掩码+连通测试）；web 测试 37 绿（e2e+admin），全套 147 | （本 commit） |
 | M4 质量评测 | ✅ 完成（v1 口径：semgrep+LLM triage denoise） | doc/m4-bench-report.md | 自建六语言 24 样例（15真/9净）引擎层+全链零漏报零误报；OWASP BenchmarkJava 抽样 106 例 recall 91%；真仓降噪 cryptography 86% / zaproxy 56% / DVWA 安全实现正确 REJECT；`codesentry bench`/`bench-top` 命令；LLM token 回流 budget_ledger；bge-m3 部署挂载盘（ollama 1024维实测） | c613025…（本 commit） |
-| M5 WebUI | 未开始（设计需求已收集：图交互完整性/污点链联动/agent 可视化/PoC 链路四验证点已确认） | — | — | — |
+| M6.0 基线收口 | ✅ 完成（2026-10-20） | doc/2026-10-20-m6.1-platform-foundation-spec.md | SPA 路由回归修复；硬编码密钥移除；pytest pythonpath / web_bind 回环默认 | 本轮提交 |
+| M6.1 平台基座 | ✅ 完成（2026-10-21） | doc/2026-10-20-m6.1-platform-foundation-{spec,plan,architecture}.md + -agent-verification + 两轮 review 报告 | LLM Profile（加密/掩码/默认/fallback/OpenCode Go 双协议）+ Agent 绑定/能力矩阵 + Prompt/Skills 注入与扫描快照固定 + llm_usage（含失败记录）+ config_audit + 最小认证/JWT/API Token/RBAC/WS 4401 + LangGraph registry + Send 并行/checkpointer 恢复/interrupt-resume/state-history/artifacts 内核测试；真实 OpenCode Go 冒烟通过（triage keep/0.95，绑定→注入→用量）；最终回归全绿（含 8 项 Agent 基座专项 + 多层协同 e2e）| 本轮提交 |
+| M6.2 沙箱部署 | ✅ 后端完成（Docker 配方/健康探测/POC_RUN=off=built/清理） | doc/2026-10-20-m6.1-platform-foundation-spec.md | 单测 mock Docker；真实容器需部署机 Docker | 本轮提交 |
+| M6.3 PoC 实证 | ✅ 后端完成（canary/fs-effect/listener/verification 字段） | 同上 | mock 容器与 listener 单测；真实容器待联调 | 本轮提交 |
+| M6.4 审查链/置信度 | ✅ 后端完成（artifacts 哈希链/校验 API/四层置信度/校准 API） | 同上 | 哈希链篡改检测、置信度/ECE 单测 | 本轮提交 |
+| M6.5 Vue3 控制台 | ✅ 完成（Vue3+Vite+Element Plus+Pinia+Router，17 视图/16 路由，build 通过） | web/frontend、src/codesentry/web/static | 静态路由/资产测试；页面含 loading/error/empty | 本轮提交 |
+| M6.6 Prompt/编排/CI | 部分完成（Prompt eval 记录、graph_templates CRUD/校验、SARIF/SARIF 下载、replay） | 同上 | 控制面 API 测试；A/B 自动评测与 webhook 待续 | — |
+| M6.7 P1/P2 | 部分完成（usage/audit/health/artifacts 页面；通知/多租户/AI 辅助待续） | requirements-v2 §5.2 | 按 P1/P2 排期 | — |

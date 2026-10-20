@@ -1,7 +1,6 @@
 """M5.1 WebUI 自动化基础功能验证（端到端：上传→扫描→时间线→UI 资产可达）。"""
 
 import io
-import json
 import os
 import zipfile
 from pathlib import Path
@@ -122,7 +121,6 @@ def test_finding_detail_endpoint():
     import psycopg  # noqa: F401
     for row in rows:
         det = client.get(f"/api/scans/{row['id']}")
-        d = det.json()
         # 详情不炸即可（findings 属于 5.2 后端下轮补齐的信口）
         assert det.status_code == 200
         break

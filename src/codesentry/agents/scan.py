@@ -32,6 +32,22 @@ def run_scan_agent(state: dict) -> dict:
     langs = profile.get("languages") or []
 
     engine_names = select_engines(OSS=OSS, lang=(langs[0] if langs else None))
+    caps: dict = {}
+    try:
+        from codesentry.control.agent_config import effective_capabilities
+
+        caps = effective_capabilities("scan")
+        if "engines" in caps:
+            allowed = caps.get("engines") or []
+            engine_names = [n for n in engine_names if n in allowed]
+    except Exception:  # noqa: BLE001, S110 - 控制面不可用时保持原引擎组合
+        pass
+    if caps and not caps.get("shell", True):
+        return {
+            "phase": "report",
+            "engine_findings": [],
+            "messages": [*(state.get("messages") or []), "scan 中止：能力矩阵禁用 shell"],
+        }
     blocked = [n for n in engine_names if not gate.check_engine(n)[0]]
     settings = get_settings()
 

@@ -1,9 +1,6 @@
 """M5.3 管理面板 API 自动化测试（agents/prompts/skills/rules/review 契约）。"""
 
-import io
 import os
-import zipfile
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient

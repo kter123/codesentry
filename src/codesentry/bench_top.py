@@ -22,16 +22,14 @@ def run_fullchain(
     session: str = "codesentry-fullchain",
     limit: int | None = None,
 ) -> dict:
-    import os
     from pathlib import Path as PP
 
     import openai
 
     from codesentry.agents.llm import LLMClient
-    from codesentry.agents.retrieval import run_retrieval
     from codesentry.agents.state import new_state
     from codesentry.agents.triage import run_triage
-    from codesentry.bench import _expected_files, parse_expect
+    from codesentry.bench import parse_expect
     from codesentry.engines.semgrep import run_semgrep
 
     llm = LLMClient.from_config()

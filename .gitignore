@@ -6,6 +6,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
+.env.live
 .codesentry/
 dist/
 build/
@@ -14,3 +15,8 @@ reports/
 examples/**/target/
 examples/**/build/
 workspace/
+node_modules/
+work/
+zaproxy/
+bench/external/
+*.tsbuildinfo

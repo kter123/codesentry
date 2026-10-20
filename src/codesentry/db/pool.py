@@ -17,6 +17,7 @@ def _get_pool() -> ConnectionPool:
             min_size=1,
             max_size=8,
             open=True,
+            timeout=5.0,
             kwargs={"options": "-c search_path=codesentry,public"},
         )
     return _pool

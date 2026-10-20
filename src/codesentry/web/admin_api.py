@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -32,21 +30,9 @@ async def agent_timeline(scan_id: int) -> dict:
 
 @app.get("/api/agents")
 async def list_agents() -> dict:
-    from codesentry.agents.state import AGENT_NAMES
+    from codesentry.control.agent_config import list_agent_configs
 
-    configs: dict[str, dict] = {}
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT name, enabled, model_role FROM agent_configs")
-            for row in cur.fetchall():
-                configs[row[0]] = {"enabled": row[1], "model_role": row[2]}
-    except Exception:  # noqa: BLE001, S110
-        pass
-    return {"agents": [
-        {"name": n, "enabled": configs.get(n, {}).get("enabled", True),
-         "model_role": configs.get(n, {}).get("model_role", "deep")}
-        for n in AGENT_NAMES
-    ]}
+    return {"agents": list_agent_configs()}
 
 
 class PromptPayload(BaseModel):
@@ -56,34 +42,28 @@ class PromptPayload(BaseModel):
 
 @app.get("/api/prompts")
 async def list_prompts() -> dict:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT ON (agent) agent, version, body FROM prompt_versions ORDER BY agent, version DESC"
-        )
-        rows = cur.fetchall()
-    return {"prompts": [{"name": n, "latest_version": v, "preview": (b or "")[:120]} for n, v, b in rows]}
+    from codesentry.control.prompts import list_prompts as _list
+
+    return {"prompts": _list()}
 
 
 @app.get("/api/prompts/{name}/versions")
 async def prompt_versions(name: str) -> dict:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT version, body, created_at FROM prompt_versions WHERE agent=%s ORDER BY version DESC", (name,))
-        rows = cur.fetchall()
+    from codesentry.control.prompts import get_versions
+
+    rows = get_versions(name)
     if not rows:
         raise HTTPException(404)
-    return {"name": name, "versions": [{"version": v, "body": b, "created": str(c)} for v, b, c in rows]}
+    return {"name": name, "versions": rows}
 
 
 @app.post("/api/prompts")
 async def create_prompt(payload: PromptPayload) -> dict:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT coalesce(max(version),0) FROM prompt_versions WHERE agent=%s", (payload.name,))
-        nv = cur.fetchone()[0] + 1
-        cur.execute(
-            "INSERT INTO prompt_versions (agent, version, body, active) VALUES (%s,%s,%s,TRUE)",
-            (payload.name, nv, payload.body),
-        )
-        conn.commit()
+    from codesentry.control.prompts import create_version
+
+    nv = create_version(payload.name, payload.body, activate=True, actor="api")
+    if nv is None:
+        raise HTTPException(503, "prompt 写入失败（DB 不可用？）")
     return {"name": payload.name, "version": nv}
 
 
@@ -93,40 +73,26 @@ class RollbackPayload(BaseModel):
 
 @app.post("/api/prompts/{name}/rollback")
 async def rollback_prompt(name: str, payload: RollbackPayload) -> dict:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT body FROM prompt_versions WHERE agent=%s AND version=%s", (name, payload.version))
-        r = cur.fetchone()
-        if not r:
-            raise HTTPException(404)
-        body = r[0]
-        cur.execute("SELECT coalesce(max(version),0) FROM prompt_versions WHERE agent=%s", (name,))
-        nv = cur.fetchone()[0] + 1
-        cur.execute(
-            "INSERT INTO prompt_versions (agent, version, body, active) VALUES (%s,%s,%s,TRUE)",
-            (name, nv, body),
-        )
-        conn.commit()
+    from codesentry.control.prompts import rollback
+
+    nv = rollback(name, payload.version, actor="api")
+    if nv is None:
+        raise HTTPException(404)
     return {"name": name, "new_version": nv, "rolled_back_from": payload.version}
 
 
 # ---- Skills ----
 @app.post("/api/skills/upload")
 async def skill_upload(payload: PromptPayload) -> dict:  # name+body(SKILL.md 正文)
-    from codesentry.agents.skills import parse_skill_md
+    from codesentry.control.skills import upload_skill
 
     try:
-        skill = parse_skill_md(payload.body)
-    except Exception as e:  # noqa: BLE001
+        out = upload_skill(payload.body, actor="api")
+    except ValueError as e:
         raise HTTPException(400, f"SKILL.md 校验失败：{e}") from e
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("INSERT INTO skills (name, description, enabled) VALUES (%s,%s,TRUE) ON CONFLICT (name) DO NOTHING",
-                    (skill.name, skill.description))
-        cur.execute("SELECT coalesce(max(version),0) FROM skill_versions WHERE name=%s", (skill.name,))
-        nv = cur.fetchone()[0] + 1
-        cur.execute("INSERT INTO skill_versions (name, version, body, body_sha256) VALUES (%s,%s,%s,%s)",
-                    (skill.name, nv, skill.body, hashlib.sha256(skill.body.encode()).hexdigest()))
-        conn.commit()
-    return {"name": skill.name, "version": nv}
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
+    return {"name": out["name"], "version": out["version"]}
 
 
 @app.get("/api/skills")
@@ -135,14 +101,18 @@ async def list_skills() -> dict:
         cur.execute("SELECT s.name, s.description, s.enabled, min(v.version), max(v.version)"
                     " FROM skills s LEFT JOIN skill_versions v ON v.name=s.name GROUP BY s.name, s.description, s.enabled")
         rows = cur.fetchall()
-        cur.execute("SELECT skill_name, agent, enabled FROM skill_assignments")
+        cur.execute("SELECT skill_name, agent, enabled, version_pin, priority FROM skill_assignments")
         assigns = cur.fetchall()
     out = []
     for n, d, en, vmin, vmax in rows:
         out.append({
             "name": n, "description": d, "enabled": en,
             "versions": vmax or 0,
-            "assigned": {a: en2 for sn, a, en2 in assigns if sn == n},
+            "assigned": {a: en2 for sn, a, en2, _vp, _pr in assigns if sn == n},
+            "assignments": [
+                {"agent": a, "enabled": en2, "version_pin": vp, "priority": pr}
+                for sn, a, en2, vp, pr in assigns if sn == n
+            ],
         })
     return {"skills": out}
 
@@ -150,18 +120,19 @@ async def list_skills() -> dict:
 class AssignPayload(BaseModel):
     agent: str
     enabled: bool = True
+    version_pin: int | None = None
+    priority: int = 100
 
 
 @app.post("/api/skills/{name}/assign")
 async def skill_assign(name: str, payload: AssignPayload) -> dict:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO skill_assignments (skill_name, agent, enabled) VALUES (%s,%s,%s)"
-            " ON CONFLICT (skill_name, agent) DO UPDATE SET enabled=%s",
-            (name, payload.agent, payload.enabled, payload.enabled),
-        )
-        conn.commit()
-    return {"ok": True, "skill": name, "agent": payload.agent, "enabled": payload.enabled}
+    from codesentry.control.skills import assign
+
+    if not assign(name, payload.agent, enabled=payload.enabled,
+                  version_pin=payload.version_pin, priority=payload.priority, actor="api"):
+        raise HTTPException(503, "skill 分配失败（DB 不可用？）")
+    return {"ok": True, "skill": name, "agent": payload.agent, "enabled": payload.enabled,
+            "version_pin": payload.version_pin, "priority": payload.priority}
 
 
 # ---- Rules ----
@@ -169,7 +140,6 @@ async def skill_assign(name: str, payload: AssignPayload) -> dict:
 async def list_rules() -> dict:
     import yaml
 
-    from codesentry.config import get_settings
 
     rule_path = Path("rules/codesentry-core.yml")
     if not rule_path.exists():
@@ -209,7 +179,7 @@ async def validate_rules(payload: YamlPayload) -> dict:
         f.write(payload.yaml)
         tmp = f.name
     try:
-        r = subprocess.run(["semgrep", "--validate", "--config", tmp], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["semgrep", "--validate", "--config", tmp], capture_output=True, text=True, timeout=120, check=False)  # noqa: ASYNC221
         ok = "found 0 configuration error" in (r.stdout + r.stderr)
         return {"ok": ok, "output": (r.stdout or r.stderr)[-800:]}
     finally:
@@ -218,7 +188,7 @@ async def validate_rules(payload: YamlPayload) -> dict:
 
 @app.post("/api/rules/save")
 async def save_rules(payload: YamlPayload) -> dict:
-    v = validate_rules(payload)
+    v = await validate_rules(payload)
     if not v["ok"]:
         raise HTTPException(400, v["output"][:300])
     body = payload.yaml
@@ -248,16 +218,31 @@ async def resume_scan(scan_id: int, payload: ResumePayload) -> dict:
     cp_ctx = _cp()
     cp = cp_ctx.__enter__()
     try:
-        from codesentry.orchestrator.graph import build_graph
+        from codesentry.agents.poc_gen import run_poc_gen
         from codesentry.agents.report import run_report
         from codesentry.agents.retrieval import run_retrieval
-        from codesentry.agents.scan import run_scan_agent
         from codesentry.agents.triage import run_triage
-        from codesentry.agents.poc_gen import run_poc_gen
+        from codesentry.orchestrator.graph import build_graph
         from codesentry.orchestrator.human_review import human_review_node
         from codesentry.orchestrator.runner import run_scan_graph  # noqa: F401 保证 imports 环节一致
 
         # 用 stub scan 以避免重跑引擎——已 triaged 状态由 checkpointer 恢复
+        snapshot = None
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT prompt_snapshot, skill_snapshot, llm_snapshot FROM scans WHERE id=%s",
+                    (scan_id,),
+                )
+                row = cur.fetchone()
+            if row and any(row):
+                snapshot = {
+                    "prompt_versions": row[0] or {},
+                    "skills_snapshot": row[1] or {},
+                    "llm_snapshot": row[2] or {},
+                }
+        except Exception:  # noqa: BLE001
+            snapshot = None
         g = build_graph(
             scan_agent=lambda s: {},
             retrieval_agent=run_retrieval,
@@ -265,13 +250,20 @@ async def resume_scan(scan_id: int, payload: ResumePayload) -> dict:
             poc_agent=run_poc_gen,
             report_agent_fn=lambda s, out=f"work/scan-{scan_id}-resume-report": run_report(s, out),
             checkpointer=cp,
-            scan_id_holder={"scan_id": scan_id, "budget": None},
+            scan_id_holder={"scan_id": scan_id, "budget": None, "snapshot": snapshot},
             human_review_node=human_review_node,
         )
         cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 30}
         final = g.invoke(Command(resume=payload.decisions), config=cfg)
+        try:
+            from codesentry.web.server import _notify
+
+            _notify("review.completed", {"scan_id": scan_id,
+                                         "kept": len(final.get("triaged_findings") or [])})
+        except Exception:  # noqa: BLE001, S110
+            pass
         return {"ok": True, "phase": final.get("phase"), "kept": len(final.get("triaged_findings") or [])}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(500, f"resume 失败：{e}") from e
     finally:
         cp_ctx.__exit__(None, None, None)

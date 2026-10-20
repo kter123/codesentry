@@ -2,11 +2,14 @@
 
 import io
 import os
+import time
 import zipfile
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+from codesentry.db.pool import get_conn
 
 SRC = str(Path(__file__).resolve().parent.parent / "src")
 if SRC not in "".__class__.__module__:
@@ -54,6 +57,26 @@ def test_upload_zip_traversal_rejected(tmp_path):
     assert r.status_code == 400
 
 
+def test_upload_ignores_client_filename():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("proj/app.py", "x = 1\n")
+    r = client.post(
+        "/api/scans",
+        files={"file": ("../../evil.zip", buf.getvalue(), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    repo = Path(r.json()["repo"])
+    assert (repo.parent / "upload.zip").exists()
+    assert not (repo.parent / "evil.zip").exists()
+
+
+def test_git_url_private_host_rejected():
+    for url in ("https://127.0.0.1/repo.git", "https://localhost/repo.git", "http://example.com/x"):
+        r = client.post("/api/scans", data={"git_url": url})
+        assert r.status_code == 400, url
+
+
 def test_diff_text_creates_scan(tmp_path):
     r = client.post("/api/scans", data={"diff_text": "--- a\n+++ b\n@@ x = 1"})
     assert r.status_code == 200, r.text
@@ -88,3 +111,41 @@ def test_settings_unknown_key_rejected():
 def test_settings_discoverable():
     r = client.put("/api/settings/llm", json={"values": {"fast_model": "fx"}})
     assert r.status_code == 200
+    assert client.get("/api/settings/llm").json()["fast_model"] == "fx"
+
+
+def test_settings_api_key_encrypted_and_masked():
+    r = client.put("/api/settings/llm", json={"values": {"model_api_key": "sk-test-123456789"}})
+    assert r.status_code == 200
+    body = client.get("/api/settings/llm").json()
+    assert body["model_api_key"].endswith("…")
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT value FROM app_settings WHERE key='model_api_key'")
+        stored = cur.fetchone()[0]
+    assert "sk-test" not in stored
+
+
+def test_upload_reuses_scan_row_and_writes_snapshots():
+    r = client.post("/api/scans", data={"diff_text": "--- a\n+++ b\n@@ x = 1"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    sid = body["scan_id"]
+    repo = body["repo"]
+    deadline = time.time() + 30
+    row = None
+    while time.time() < deadline:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, prompt_snapshot FROM scans WHERE id=%s",
+                (sid,),
+            )
+            row = cur.fetchone()
+        if row and row[0] in ("done", "failed"):
+            break
+        time.sleep(0.2)
+    assert row is not None, "scan did not finish in time"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM scans WHERE repo_path=%s", (repo,))
+        same_repo = int(cur.fetchone()[0])
+    assert same_repo == 1, "upload must not create a duplicate scan row"
+    assert isinstance(row[1], dict) and "triage" in row[1]

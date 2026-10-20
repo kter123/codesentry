@@ -1,14 +1,31 @@
+import { fileURLToPath, URL } from 'node:url'
+
+import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   base: '/ui/',
-  plugins: [react()],
-  server: {
-    proxy: {
-      '/api': 'http://127.0.0.1:8000',
-      '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
+  plugins: [vue()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
-  build: { outDir: '../../src/codesentry/web/static' },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://127.0.0.1:8000',
+        ws: true,
+      },
+    },
+  },
+  build: {
+    outDir: '../../src/codesentry/web/static',
+    emptyOutDir: true,
+  },
 })

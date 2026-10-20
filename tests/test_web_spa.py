@@ -27,3 +27,16 @@ def test_assets_still_served():
     m = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
     assert m, html[:300]
     assert client.get(m.group(1)).status_code == 200
+
+
+def test_root_assets_mount_served():
+    html = client.get("/ui/agents").text
+    m = re.search(r'src="/ui/(assets/[^"]+\.js)"', html)
+    assert m, html[:300]
+    assert client.get("/" + m.group(1)).status_code == 200
+
+
+def test_ui_path_traversal_rejected():
+    for path in ("/ui/%2e%2e/server.py", "/ui/%2e%2e/%2e%2e/%2e%2e/etc/passwd"):
+        r = client.get(path)
+        assert r.status_code == 404, path

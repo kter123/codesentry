@@ -131,6 +131,12 @@ CREATE TABLE llm_profiles (
   timeout_s INT NOT NULL DEFAULT 60, max_concurrency INT NOT NULL DEFAULT 4,
   input_price_per_1k REAL NOT NULL DEFAULT 0, output_price_per_1k REAL NOT NULL DEFAULT 0,
   capabilities JSONB NOT NULL DEFAULT '{}',   -- {"json":true,"tools":false,"stream":true}
+  protocol TEXT NOT NULL DEFAULT 'openai-compatible',
+  extra_headers JSONB NOT NULL DEFAULT '{}',
+  model_catalog JSONB NOT NULL DEFAULT '[]',
+  model_protocols JSONB NOT NULL DEFAULT '{}',
+  quota_windows JSONB NOT NULL DEFAULT '[]',
+  billing_mode TEXT NOT NULL DEFAULT 'metered',
   fallback_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE, is_default BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -151,7 +157,7 @@ CREATE TABLE llm_profiles (
 3. `is_default`
 4. 全局 `Settings`（`.env`）
 
-失败策略：429/5xx/超时 → 指数退避重试 `retries` 次 → 切 fallback profile → 仍失败则节点降级（保留引擎原始结论）。预算层：`BudgetGuard` 进入 `warn`（80%）时 deep 模型自动降 fast（可关）；`breach` 时停止新 LLM 调用。
+失败策略：429/5xx/超时 → 指数退避重试 `retries` 次 → 切 fallback profile → 仍失败则节点降级（保留引擎原始结论）。`MissingSessionID`、`ModelProtocolUnsupported` 等配置/协议错误不盲目重试，按 Provider 规格切换协议或标记模型不可用。Provider 预设（OpenAI/Anthropic 兼容、Ollama、Azure、OpenCode Go）与逐模型协议见 `2026-10-20-opencode-go-provider-design.md`。预算层：`BudgetGuard` 进入 `warn`（80%）时 deep 模型自动降 fast（可关）；`breach` 时停止新 LLM 调用。
 
 ### 3.3 用量与成本
 

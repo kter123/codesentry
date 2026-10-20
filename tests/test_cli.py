@@ -35,3 +35,8 @@ def test_engines_check_missing_exits_1(monkeypatch):
     monkeypatch.setattr("codesentry.cli_commands.shutil.which", lambda name: None)
     result = runner.invoke(cli_mod.app, ["engines"])
     assert result.exit_code == 1
+
+
+def test_serve_and_user_create_registered():
+    assert runner.invoke(cli_mod.app, ["serve", "--help"]).exit_code == 0
+    assert runner.invoke(cli_mod.app, ["user", "create", "--help"]).exit_code == 0

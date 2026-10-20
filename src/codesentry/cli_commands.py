@@ -33,6 +33,10 @@ def init_db(dry_run: bool = typer.Option(False, "--dry-run", help="只打印 DDL
 
         with psycopg.connect(get_settings().database_url) as conn:
             conn.execute(render_ddl())
+            conn.commit()
+        from codesentry.control.agent_config import ensure_agent_configs
+
+        ensure_agent_configs()
         typer.echo("init-db 完成 — schema: codesentry, langgraph; extension: vector")
     except Exception as e:  # noqa: BLE001 - 连库入口需对所有连不上/执行失败给出明确指引
         typer.echo(f"init-db 失败：{e}", err=True)
@@ -217,3 +221,51 @@ def engines_check() -> None:
     if len(missing) == 3:
         typer.echo("三个引擎全部缺失 — 请安装引擎或配置 CODESENTRY_*_BIN", err=True)
         raise typer.Exit(1)
+
+
+def user_create(
+    username: str = typer.Argument(..., help="用户名"),
+    role: str = typer.Option("viewer", "--role", help="admin|analyst|viewer"),
+    password: str = typer.Option("", "--password", help="密码；留空则交互输入"),
+    admin: bool = typer.Option(False, "--admin", help="等价于 --role admin"),
+) -> None:
+    """创建本地用户（M6.1 最小认证）。"""
+    from codesentry.control.auth import create_user
+
+    if admin:
+        role = "admin"
+    if role not in {"admin", "analyst", "viewer"}:
+        typer.echo(f"非法角色：{role}", err=True)
+        raise typer.Exit(2)
+    if not password:
+        password = typer.prompt("Password", hide_input=True, confirmation_prompt=True)
+    try:
+        user = create_user(username, password, role=role, actor="cli")
+    except ValueError as e:
+        typer.echo(f"创建失败：{e}", err=True)
+        raise typer.Exit(1) from e
+    if user is None:
+        typer.echo("创建失败（数据库不可用？先运行 codesentry init-db）", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"用户已创建：{user['username']} ({user['role']})")
+
+
+def serve_cmd(
+    host: str = typer.Option("", "--host", help="监听地址；默认取 CODESENTRY_WEB_BIND"),
+    port: int = typer.Option(8000, "--port", help="监听端口"),
+    reload: bool = typer.Option(False, "--reload", help="开发热重载"),
+) -> None:
+    """启动 Web 控制台（M6.1）。"""
+    import uvicorn
+
+    from codesentry.config import get_settings
+
+    settings = get_settings()
+    bind = host or settings.web_bind
+    if bind not in {"127.0.0.1", "localhost", "::1"} and not settings.auth_enabled:
+        typer.echo(
+            "警告：绑定非回环地址但未启用认证（CODESENTRY_AUTH_ENABLED=true）。"
+            "请仅在内网可信环境使用或先启用认证。",
+            err=True,
+        )
+    uvicorn.run("codesentry.web.server:app", host=bind, port=port, reload=reload)

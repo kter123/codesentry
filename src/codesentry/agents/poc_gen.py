@@ -1,9 +1,7 @@
 """PoCGenAgent（agent.md FR-13/FR-14，D27–D32）。
 
-分级 PoC：HTTP 类 → curl 请求序列；本地类 → payload+注入点+本地调用脚本。
-POC_RUN=off（默认）→ 全部 plausible；sandbox/target 显式开启才执行。
-危险 payload 静态检查（§10）：rm 类/反弹 shell/DNS 出网模板 → 拒绝并标 reason。
-执行日志回填 verdict：verified / plausible / false_positive；生成失败 → plausible + 原因。
+M6.1：支持 AgentRuntime 注入（生效 Prompt + Skills + 能力矩阵）；
+POC_RUN=off（默认）→ plausible；sandbox 才执行；危险 payload 静态拒绝。
 """
 
 import json
@@ -19,31 +17,35 @@ DANGEROUS_PATTERNS = [
     (re.compile(r"\bnc\b\s|\bncat\b|\bbash\s+-i\b.*\b/dev/tcp\b|/dev/tcp/"), "反弹 shell"),
     (re.compile(r"\bcurl\b.*\|\s*(ba)?sh\b|\bwget\b.*\|\s*(ba)?sh\b"), "管道执行"),
     (re.compile(r".shutdown|fork\(\)|while\s+true.*fork"), "拒绝服务模式"),
+    (re.compile(r"\bos\.remove\b|\bshutil\.rmtree\b|\bos\.unlink\b"), "文件删除模式"),
 ]
 
-HTTP_CWES = {918, 79, 89, 611, 352, 77, 113}  # HTTP 类漏洞（web 接口型）
+HTTP_CWES = {918, 79, 89, 611, 352, 77, 113}
 POC_VERDICTS = ("verified", "plausible", "false_positive")
+
+_DEFAULT_SYSTEM = (
+    "你是 PoCGenAgent。基于 finding 与证据生成：①利用链路步骤列表（source→传播→sink）；"
+    "②可执行的内容——HTTP 类给 curl 命令序列；本地类给 python/注入点调用样例。"
+    "禁止生成 rm -rf / 反弹 shell / sudo 等 payload。"
+    "验证占位符：HTTP 回调使用 {CANARY_URL}，命令回显使用 {CANARY_CMD}，文件副作用使用 {CANARY_FILE}。"
+    '只输出 JSON：{"exploit_chain": ["step1", ...], "poc_script": "...", "notes": "备注"}'
+)
 
 
 def check_payload_safety(poc_script: str) -> tuple[bool, str]:
-    """静态危险模式检查；命中 (False, 原因)。"""
     for pat, msg in DANGEROUS_PATTERNS:
         if pat.search(poc_script):
             return False, f"危险 payload 拒绝：{msg}"
     return True, ""
 
 
-def gen_poc(llm, finding: dict, evidence: dict) -> dict:
-    """生成利用链路 + PoC 脚本文本（不执行）。返回 {exploit_chain, poc_script, poc_kind, notes}。"""
+def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None) -> dict:
     cwe = int(finding.get("cwe") or 0)
     kind = "http" if cwe in HTTP_CWES else "local"
-    system = (
-        "你是 PoCGenAgent。基于 finding 与证据生成：①利用链路步骤列表（source→传播→sink）；"
-        "②可执行的内容——HTTP 类给 curl 命令序列；本地类给 python/注入点调用样例。"
-        "禁止生成 rm -rf / 反弹 shell / sudo 等 payload。"
-        '只输出 JSON：{"exploit_chain": ["step1", ...], "poc_script": "...", "notes": "备注"}'
-    )
     user = json.dumps({"finding": finding, "evidence": evidence}, ensure_ascii=False)[:10000]
+    if system and "poc_script" not in system:
+        system = system.rstrip() + "\n\n" + _DEFAULT_SYSTEM
+    system = system or _DEFAULT_SYSTEM
     try:
         text = llm.complete(system, user, model_role="deep")
         m = re.search(r"\{.*\}", text, re.DOTALL)
@@ -53,15 +55,18 @@ def gen_poc(llm, finding: dict, evidence: dict) -> dict:
             script = str(d.get("poc_script") or "")
             safe, reason = check_payload_safety(script)
             if not safe:
-                return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind, "notes": reason, "rejected": True}
-            return {"exploit_chain": chain, "poc_script": script, "poc_kind": kind, "notes": d.get("notes", ""), "rejected": False}
-        return {"exploit_chain": [], "poc_script": "", "poc_kind": kind, "notes": "LLM 输出不可解析", "rejected": False}
+                return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
+                        "notes": reason, "rejected": True}
+            return {"exploit_chain": chain, "poc_script": script, "poc_kind": kind,
+                    "notes": d.get("notes", ""), "rejected": False}
+        return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
+                "notes": "LLM 输出不可解析", "rejected": False}
     except Exception as e:  # noqa: BLE001 - 生成失败 → finding 保留 + plausible + 原因（§10）
-        return {"exploit_chain": [], "poc_script": "", "poc_kind": kind, "notes": f"生成失败：{str(e)[:80]}", "rejected": False}
+        return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
+                "notes": f"生成失败：{str(e)[:80]}", "rejected": False}
 
 
 def execute_poc_local(poc_script: str, work_dir: str, timeout: int = 60) -> dict:
-    """sandbox 档本地执行：临时目录 + 禁出网（简化：无网络钩子，靠系统 sandbox 工具；logs 回填）。"""
     safe, reason = check_payload_safety(poc_script)
     if not safe:
         return {"executed": False, "log": reason, "success": False}
@@ -70,7 +75,8 @@ def execute_poc_local(poc_script: str, work_dir: str, timeout: int = 60) -> dict
         p.write_text(poc_script, encoding="utf-8")
         try:
             r = subprocess.run(
-                ["python3", str(p)], capture_output=True, text=True, timeout=timeout, check=False, cwd=td
+                ["python3", str(p)], capture_output=True, text=True, timeout=timeout,
+                check=False, cwd=td,
             )
             return {
                 "executed": True,
@@ -81,14 +87,57 @@ def execute_poc_local(poc_script: str, work_dir: str, timeout: int = 60) -> dict
             return {"executed": True, "log": f"timeout after {timeout}s", "success": False}
 
 
-def run_poc_gen(state: dict, llm=None) -> dict:
+def _merge_messages(state: dict, runtime) -> list:
+    existing = list(state.get("messages") or [])
+    if runtime is not None:
+        existing.extend(f"{runtime.agent}: {w}" for w in runtime.warnings)
+    return existing
+
+
+def _snapshot_updates(state: dict, runtime) -> dict:
+    if runtime is None:
+        return {}
+    out: dict = {}
+    pv = {**(state.get("prompt_versions") or {}), **runtime.prompt_snapshot()}
+    if pv:
+        out["prompt_versions"] = pv
+    ss = {**(state.get("skills_snapshot") or {}), **runtime.skills_snapshot()}
+    if ss:
+        out["skills_snapshot"] = ss
+    return out
+
+
+def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
     """节点签名：state -> update。POC_RUN 默认 off → 全 plausible（D28/§10）。"""
     from codesentry.config import get_settings
 
-    mode = os.environ.get("CODESENTRY_POC_RUN", "off")
-    work = Path(get_settings().work_dir)
-    poc_results: dict = {}
     triaged = state.get("triaged_findings") or []
+    messages = _merge_messages(state, runtime)
+
+    if runtime is not None and not runtime.enabled:
+        disabled_results: dict[str, dict] = {}
+        disabled_updated: list[dict] = []
+        for t in triaged:
+            fdict = {k: v for k, v in t.items() if k != "triage"}
+            key = f"{fdict.get('rule_id')}@{fdict.get('line')}"
+            disabled_results[key] = {
+                "exploit_chain": [], "poc_file": "", "verdict": "plausible",
+                "execution_log": "agent disabled——PoC 不生成，最高 plausible",
+            }
+            disabled_updated.append({**t, "poc": disabled_results[key]})
+        return {"poc_results": disabled_results, "triaged_findings": disabled_updated,
+                "phase": "human_review", "messages": messages,
+                **_snapshot_updates(state, runtime)}
+
+    mode = os.environ.get("CODESENTRY_POC_RUN") or get_settings().poc_run
+    if runtime is not None:
+        llm = runtime.llm or llm
+        if not runtime.capabilities.get("poc_exec", True):
+            mode = "off"
+
+    system = runtime.system() if runtime is not None else None
+    work = Path(get_settings().work_dir)
+    poc_results: dict[str, dict] = {}
     updated: list[dict] = []
     for t in triaged:
         fdict = {k: v for k, v in t.items() if k != "triage"}
@@ -96,21 +145,22 @@ def run_poc_gen(state: dict, llm=None) -> dict:
         if mode == "off":
             poc_results[key] = {
                 "exploit_chain": [], "poc_file": "", "verdict": "plausible",
-                "execution_log": "POC_RUN=off — 只生成不执行（D28）",
+                "execution_log": "POC_RUN=off（或能力矩阵禁用 poc_exec）— 只生成不执行（D28）",
             }
             updated.append({**t, "poc": poc_results[key]})
             continue
-        gen = gen_poc(llm, fdict, (state.get("evidence") or {}).get(key, {})) if llm else {"exploit_chain": [], "poc_script": "", "poc_kind": "local", "notes": "no llm", "rejected": False}
+        gen = gen_poc(llm, fdict, (state.get("evidence") or {}).get(key, {}), system=system) if llm \
+            else {"exploit_chain": [], "poc_script": "", "poc_kind": "local",
+                  "notes": "no llm", "rejected": False}
         script = str(gen.get("poc_script") or "")
         if gen.get("rejected"):
-            poc_results[key] = {
-                "exploit_chain": gen["exploit_chain"], "poc_file": "", "verdict": "plausible",
-                "execution_log": gen["notes"],
-            }
+            poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "",
+                                "verdict": "plausible", "execution_log": gen["notes"]}
             updated.append({**t, "poc": poc_results[key]})
             continue
         if not script:
-            poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "", "verdict": "plausible",
+            poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "",
+                                "verdict": "plausible",
                                 "execution_log": f"生成失败：{gen['notes']}"}
             updated.append({**t, "poc": poc_results[key]})
             continue
@@ -119,13 +169,34 @@ def run_poc_gen(state: dict, llm=None) -> dict:
         fname = f"poc_{re.sub(r'[^A-Za-z0-9]', '_', key)[:60]}.py"
         poc_file = str(poc_dir / fname)
         Path(poc_file).write_text(script, encoding="utf-8")
+        method = "none"
+        nonce = ""
         if mode == "sandbox":
-            ex = execute_poc_local(script, str(poc_dir))
-            verdict = "verified" if ex["success"] else "plausible"  # 试跑失败 ≠ false_positive（§10）
-            log = ex["log"]
-        else:  # target：用户自备环境；M3 仅记录目标占位，实发 M5 + 显式授权
+            target_url = str(state.get("target_url") or "")
+            if target_url or state.get("deploy_status") == "ready":
+                from codesentry.sandbox.verify import verify_poc
+
+                vr = verify_poc(
+                    int(state.get("scan_id") or 0), script, target_url,
+                    f"codesentry-target-{state.get('scan_id')}",
+                )
+                verdict = "verified" if vr.ok else "plausible"
+                log = vr.log
+                method = vr.method
+                nonce = vr.nonce
+            else:
+                ex = execute_poc_local(script, str(poc_dir))
+                verdict = "verified" if ex["success"] else "plausible"
+                log = ex["log"]
+        else:
             verdict = "plausible"
-            log = "POC_RUN=target — 目标环境待用户显式授权（M5 交互）"
-        poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": poc_file, "verdict": verdict, "execution_log": log}
+            log = "POC_RUN=target — 目标环境待用户显式授权（本轮不支持远程 target）"
+        poc_results[key] = {
+            "exploit_chain": gen["exploit_chain"], "poc_file": poc_file,
+            "verdict": verdict, "execution_log": log,
+            "verification_method": method, "verification_nonce": nonce,
+        }
         updated.append({**t, "poc": poc_results[key]})
-    return {"poc_results": poc_results, "triaged_findings": updated, "phase": "human_review"}
+    return {"poc_results": poc_results, "triaged_findings": updated,
+            "phase": "human_review", "messages": messages,
+            **_snapshot_updates(state, runtime)}

@@ -1,0 +1,57 @@
+"""LangGraph 节点注册表（M6.1）：节点元数据与默认可调用对象。"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class NodeSpec:
+    name: str
+    description: str
+    requires_llm: bool = False
+    required: bool = False
+
+
+NODE_SPECS: dict[str, NodeSpec] = {
+    "recon": NodeSpec("recon", "仓库画像与扫描计划", required=True),
+    "scan": NodeSpec("scan", "三引擎并行调度与许可 Gate", requires_llm=False),
+    "retrieval": NodeSpec("retrieval", "GraphRAG 证据检索"),
+    "triage": NodeSpec("triage", "LLM 可达性验证与降噪", requires_llm=True),
+    "poc_gen": NodeSpec("poc_gen", "PoC 生成与验证", requires_llm=True),
+    "report": NodeSpec("report", "报告生成", required=True),
+}
+
+
+def get_node(name: str) -> NodeSpec:
+    try:
+        return NODE_SPECS[name]
+    except KeyError as exc:
+        raise KeyError(f"unknown node: {name}") from exc
+
+
+def all_nodes() -> list[NodeSpec]:
+    return list(NODE_SPECS.values())
+
+
+def default_nodes() -> dict[str, Callable]:
+    """懒加载默认节点函数，避免 registry 导入 agents 造成循环。"""
+    from codesentry.agents.poc_gen import run_poc_gen
+    from codesentry.agents.recon import run_recon
+    from codesentry.agents.report import run_report
+    from codesentry.agents.retrieval import run_retrieval
+    from codesentry.agents.scan import run_scan_agent
+    from codesentry.agents.triage import run_triage
+
+    def default_report(state):
+        return run_report(state, state.get("report_dir") or "work/report")
+
+    return {
+        "recon": run_recon,
+        "scan": run_scan_agent,
+        "retrieval": run_retrieval,
+        "triage": run_triage,
+        "poc_gen": run_poc_gen,
+        "report": default_report,
+    }
