@@ -19,3 +19,6 @@ user_app.command("create")(cli_commands.user_create)
 app.add_typer(user_app, name="user")
 app.command(name="bench")(bench.bench_cmd)
 app.command(name="bench-top")(bench_top.fullchain_cmd)
+
+if __name__ == "__main__":
+    app()

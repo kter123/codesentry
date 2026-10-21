@@ -205,8 +205,15 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
         try:
             with get_conn() as conn, conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE scans SET status=%s, error_reason=%s WHERE id=%s",
-                    (status, err_text, scan_id),
+                    "UPDATE scans SET status=%s, error_reason=%s, deploy_status=%s,"
+                    " deploy_log=%s, target_url=%s WHERE id=%s",
+                    (
+                        status, err_text,
+                        str(final.get("deploy_status") or ""),
+                        str(final.get("deploy_log") or "")[:4000],
+                        str(final.get("target_url") or ""),
+                        scan_id,
+                    ),
                 )
                 conn.commit()
         except Exception:  # noqa: BLE001, S110
