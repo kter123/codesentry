@@ -256,6 +256,23 @@ async def resume_scan(scan_id: int, payload: ResumePayload) -> dict:
         cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 30}
         final = g.invoke(Command(resume=payload.decisions), config=cfg)
         try:
+            with get_conn() as conn, conn.cursor() as cur:
+                for d in payload.decisions:
+                    if d.get("rule_id") is not None and d.get("line") is not None:
+                        cur.execute(
+                            "UPDATE findings SET verdict=%s WHERE scan_id=%s AND rule_id=%s AND line=%s",
+                            (str(d.get("verdict") or "keep"), scan_id, d.get("rule_id"), d.get("line")),
+                        )
+                conn.commit()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            from codesentry.rag.experience import promote_findings
+
+            promote_findings(scan_id, verdicts=("keep", "verified", "confirmed"))
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
             from codesentry.web.server import _notify
 
             _notify("review.completed", {"scan_id": scan_id,

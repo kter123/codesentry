@@ -564,6 +564,27 @@ def _health_sync() -> dict:
     }
 
 
+@app.post("/api/scans/{scan_id}/promote")
+async def promote_scan(scan_id: int) -> dict:
+    from codesentry.rag.experience import promote_findings
+
+    return {"ok": True, "promoted": promote_findings(scan_id)}
+
+
+@app.get("/api/experience/vuln-cases")
+async def experience_vuln_cases(q: str = "", cwe: int | None = None) -> dict:
+    from codesentry.rag.experience import search_vuln_cases
+
+    return {"cases": search_vuln_cases(q, cwe=cwe, limit=20)}
+
+
+@app.get("/api/experience/patterns")
+async def experience_patterns(q: str = "", cwe: int | None = None) -> dict:
+    from codesentry.rag.experience import search_patterns
+
+    return {"patterns": search_patterns(q, cwe=cwe, limit=20)}
+
+
 @app.get("/api/scans/{scan_id}/artifacts")
 async def get_scan_artifacts(scan_id: int) -> dict:
     from codesentry.orchestrator.artifacts import list_artifacts

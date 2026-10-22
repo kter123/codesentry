@@ -52,10 +52,19 @@ def detect_entry_points(repo: str, lang_list: list[str]) -> list[str]:
 
 def build_profile(repo: str) -> dict:
     langs = detect_languages(repo)
+    frameworks = detect_frameworks(repo)
+    strategies: list[dict] = []
+    try:
+        from codesentry.rag.experience import search_strategies
+
+        strategies = search_strategies(" ".join(langs + frameworks), limit=3)
+    except Exception:  # noqa: BLE001, S110 - 经验库不可用不阻塞
+        pass
     return {
         "languages": langs,
-        "frameworks": detect_frameworks(repo),
+        "frameworks": frameworks,
         "entry_points": detect_entry_points(repo, langs) if "python" in langs else [],
+        "strategies": strategies,
     }
 
 

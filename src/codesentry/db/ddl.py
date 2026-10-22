@@ -334,6 +334,65 @@ CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.webhooks (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- M3.5 RAG 五库：历史案例 / 漏洞模式 / 扫描策略
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.vuln_cases (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    cwe INT NOT NULL DEFAULT 0,
+    lang TEXT NOT NULL DEFAULT '',
+    pattern TEXT NOT NULL DEFAULT '',
+    exploit_chain JSONB NOT NULL DEFAULT '[]',
+    poc TEXT NOT NULL DEFAULT '',
+    fix TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    embedding vector,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS vuln_cases_fts_idx ON {BUSINESS_SCHEMA}.vuln_cases
+    USING GIN (to_tsvector('simple', title || ' ' || pattern));
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.audit_patterns (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT '',
+    cwe INT NOT NULL DEFAULT 0,
+    pattern TEXT NOT NULL DEFAULT '',
+    guidance TEXT NOT NULL DEFAULT '',
+    embedding vector,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.scan_strategies (
+    id BIGSERIAL PRIMARY KEY,
+    project_profile TEXT NOT NULL,
+    languages JSONB NOT NULL DEFAULT '[]',
+    strategy JSONB NOT NULL DEFAULT '{{}}',
+    embedding vector,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- M3.5 GraphRAG：代码调用图（节点/边）
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.code_graph_nodes (
+    id BIGSERIAL PRIMARY KEY,
+    project TEXT NOT NULL,
+    node_key TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'function',
+    name TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    start_line INT NOT NULL DEFAULT 0,
+    end_line INT NOT NULL DEFAULT 0,
+    UNIQUE (project, node_key)
+);
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.code_graph_edges (
+    id BIGSERIAL PRIMARY KEY,
+    project TEXT NOT NULL,
+    src_key TEXT NOT NULL,
+    dst_key TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'calls'
+);
+CREATE INDEX IF NOT EXISTS code_graph_edges_src_idx ON {BUSINESS_SCHEMA}.code_graph_edges (project, src_key);
+CREATE INDEX IF NOT EXISTS code_graph_edges_dst_idx ON {BUSINESS_SCHEMA}.code_graph_edges (project, dst_key);
 """
 
 

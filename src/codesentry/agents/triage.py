@@ -33,7 +33,14 @@ def triage_one(llm, finding: dict, evidence: dict, kb: list[dict] | None = None,
                system: str | None = None, tools=None, max_iterations: int = 8) -> dict:
     """对单个 finding 调 LLM 验证。输出 dict 含 verdict/confidence/rationale/fix_advice。"""
     user = json.dumps(
-        {"finding": finding, "evidence": evidence.get("code", [])[:5], "kb": (kb or [])[:3]},
+        {
+            "finding": finding,
+            "evidence": evidence.get("code", [])[:5],
+            "kb": (kb or [])[:3],
+            "vuln_cases": (evidence.get("vuln_cases") or [])[:3],
+            "patterns": (evidence.get("patterns") or [])[:3],
+            "graph": evidence.get("graph") or {},
+        },
         ensure_ascii=False,
     )[:12000]
     if system and "verdict" not in system:

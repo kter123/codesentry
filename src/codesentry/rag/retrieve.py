@@ -40,5 +40,5 @@ def hybrid_search(
             cols = [d.name for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     return [
-        {**r, "score": float(r["score"])} for r in rows if r["score"] > 0
+        {**r, "score": float(r["score"] or 0)} for r in rows if (r["score"] or 0) > 0
     ]

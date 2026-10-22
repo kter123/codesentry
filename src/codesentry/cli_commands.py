@@ -35,8 +35,10 @@ def init_db(dry_run: bool = typer.Option(False, "--dry-run", help="只打印 DDL
             conn.execute(render_ddl())
             conn.commit()
         from codesentry.control.agent_config import ensure_agent_configs
+        from codesentry.rag.experience import seed_experience
 
         ensure_agent_configs()
+        seed_experience()
         typer.echo("init-db 完成 — schema: codesentry, langgraph; extension: vector")
     except Exception as e:  # noqa: BLE001 - 连库入口需对所有连不上/执行失败给出明确指引
         typer.echo(f"init-db 失败：{e}", err=True)

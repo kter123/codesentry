@@ -205,6 +205,12 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
         status = "failed"
         err_text = str(e)[:500]
         typer.echo(f"findings 落库失败：{e}", err=True)
+    try:
+        from codesentry.rag.experience import promote_findings
+
+        promote_findings(scan_id, verdicts=("verified", "confirmed"))
+    except Exception:  # noqa: BLE001, S110
+        pass
     finally:
         try:
             with get_conn() as conn, conn.cursor() as cur:
