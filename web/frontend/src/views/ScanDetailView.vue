@@ -13,6 +13,7 @@
           <el-icon><Refresh /></el-icon>
           <span>刷新</span>
         </el-button>
+        <el-button type="primary" @click="assistVisible = true">问 AI</el-button>
       </template>
     </page-header>
 
@@ -339,6 +340,36 @@
         <el-empty v-else description="未能加载 finding 详情" />
       </div>
     </el-drawer>
+
+    <el-drawer v-model="assistVisible" title="Ask CodeSentry" size="46%" destroy-on-close>
+      <el-input
+        v-model="assistQuestion"
+        type="textarea"
+        :rows="4"
+        placeholder="例如：这个 SSRF finding 为什么被判为可达？有哪些证据？"
+      />
+      <el-button
+        type="primary"
+        style="margin-top: 10px"
+        :loading="assistLoading"
+        :disabled="!assistQuestion.trim()"
+        @click="askAssist"
+      >
+        提问
+      </el-button>
+      <el-alert
+        v-if="assistError"
+        type="error"
+        :title="assistError"
+        :closable="false"
+        show-icon
+        style="margin-top: 10px"
+      />
+      <pre v-if="assistAnswer" class="pre-block light" style="margin-top: 14px">{{ assistAnswer }}</pre>
+      <div v-if="assistSources.length" class="muted mono" style="margin-top: 10px; font-size: 12px">
+        来源：{{ assistSources.map((s) => `${s.type}:${s.node || s.rule_id || ''}`).join(' · ') }}
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -406,6 +437,12 @@ const artifacts = ref<ArtifactRow[]>([])
 const artifactVerify = ref<{ ok: boolean; count?: number; broken_at?: number } | null>(null)
 const artifactLoading = ref(false)
 const liveEvents = ref<LiveEvent[]>([])
+const assistVisible = ref(false)
+const assistQuestion = ref('')
+const assistLoading = ref(false)
+const assistError = ref('')
+const assistAnswer = ref('')
+const assistSources = ref<Array<{ type: string; node?: string; rule_id?: string }>>([])
 let socket: WebSocket | undefined
 
 let pollTimer: number | undefined
@@ -444,6 +481,25 @@ async function verifyArtifacts(): Promise<void> {
   } catch (e) {
     artifactVerify.value = { ok: false }
     error.value = `审查链校验失败：${errorMessage(e)}`
+  }
+}
+
+async function askAssist(): Promise<void> {
+  assistLoading.value = true
+  assistError.value = ''
+  assistAnswer.value = ''
+  assistSources.value = []
+  try {
+    const res = await api.post<{ answer?: string; sources?: Array<{ type: string; node?: string; rule_id?: string }> }>(
+      '/api/assist/ask',
+      { question: assistQuestion.value, scan_id: scanId.value },
+    )
+    assistAnswer.value = res.answer || ''
+    assistSources.value = res.sources || []
+  } catch (e) {
+    assistError.value = `提问失败：${errorMessage(e)}`
+  } finally {
+    assistLoading.value = false
   }
 }
 

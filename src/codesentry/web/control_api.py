@@ -620,6 +620,106 @@ async def verify_scan_artifacts(scan_id: int) -> dict:
     return verify_chain(scan_id)
 
 
+class AskPayload(BaseModel):
+    question: str
+    scan_id: int | None = None
+
+
+class KbSearchPayload(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+class KbImportPayload(BaseModel):
+    source: str
+    title: str = ""
+    content: str
+    lang: str = "zh"
+
+
+@app.get("/api/kb/stats")
+async def kb_stats() -> dict:
+    from codesentry.rag.kb_ops import stats
+
+    return stats()
+
+
+@app.post("/api/kb/search")
+async def kb_search(payload: KbSearchPayload) -> dict:
+    from codesentry.rag.kb_ops import search
+
+    return {"rows": await run_in_threadpool(search, payload.query, payload.top_k)}
+
+
+@app.post("/api/kb/import")
+async def kb_import(payload: KbImportPayload) -> dict:
+    from codesentry.rag.kb_ops import import_text
+
+    ok = await run_in_threadpool(
+        import_text, payload.source, payload.title, payload.content, payload.lang
+    )
+    if not ok:
+        raise HTTPException(400, "导入失败（内容为空或 DB 不可用）")
+    return {"ok": True, "source": payload.source}
+
+
+class CommentPayload(BaseModel):
+    body: str
+    finding_id: int | None = None
+    author: str = ""
+
+
+@app.get("/api/scans/{scan_id}/comments")
+async def scan_comments(scan_id: int, finding_id: int | None = None) -> dict:
+    from codesentry.control.review_comments import list_comments
+
+    return {"comments": list_comments(scan_id, finding_id)}
+
+
+@app.post("/api/scans/{scan_id}/comments")
+async def add_scan_comment(scan_id: int, payload: CommentPayload) -> dict:
+    from codesentry.control.review_comments import add_comment
+
+    try:
+        out = add_comment(scan_id, payload.body, finding_id=payload.finding_id,
+                          author=payload.author)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if out is None:
+        raise HTTPException(503, "评论写入失败")
+    return out
+
+
+@app.post("/api/assist/ask")
+async def assist_ask(payload: AskPayload) -> dict:
+    from codesentry.control.assist import ask
+
+    try:
+        return await run_in_threadpool(ask, payload.question, payload.scan_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        raise HTTPException(503, f"AI 辅助不可用：{str(e)[:200]}") from e
+
+
+class RetentionPayload(BaseModel):
+    days: int = 30
+
+
+@app.post("/api/ops/retention")
+async def purge_retention(payload: RetentionPayload) -> dict:
+    from codesentry.control.retention import purge_scans
+
+    return {"ok": True, "deleted": await run_in_threadpool(purge_scans, payload.days)}
+
+
+@app.get("/api/ops/disk")
+async def ops_disk() -> dict:
+    from codesentry.control.retention import disk_usage
+
+    return await run_in_threadpool(disk_usage)
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return await run_in_threadpool(_health_sync)

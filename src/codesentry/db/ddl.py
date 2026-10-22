@@ -393,6 +393,16 @@ CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.code_graph_edges (
 );
 CREATE INDEX IF NOT EXISTS code_graph_edges_src_idx ON {BUSINESS_SCHEMA}.code_graph_edges (project, src_key);
 CREATE INDEX IF NOT EXISTS code_graph_edges_dst_idx ON {BUSINESS_SCHEMA}.code_graph_edges (project, dst_key);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.review_comments (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT NOT NULL REFERENCES {BUSINESS_SCHEMA}.scans(id) ON DELETE CASCADE,
+    finding_id BIGINT REFERENCES {BUSINESS_SCHEMA}.findings(id) ON DELETE CASCADE,
+    author TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS review_comments_scan_idx ON {BUSINESS_SCHEMA}.review_comments (scan_id);
 """
 
 

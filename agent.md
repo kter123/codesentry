@@ -322,5 +322,5 @@ flowchart TD
 | M6.3 PoC 实证 | ✅ 完成（PoC 自身 canary 占位符；cmd/fs/listener） | 同上 | 真实 scan 613 canary 回显命中 nonce，method=canary | 本轮提交 |
 | M6.4 审查链/置信度 | ✅ 完成（artifacts 哈希链/校验 API、tool_trace、四层置信度/校准 API、审查链 UI） | 同上 | 真实扫描 594 7 节点链校验；篡改检测/置信度单测 | 本轮提交 |
 | M6.5 Vue3 控制台 | ✅ 完成（17 视图/16 路由、审查链 tab、实时 Agent 事件、finding 工具轨迹/置信度） | web/frontend、src/codesentry/web/static | 静态路由/资产测试；npm build 通过 | 本轮提交 |
-| M6.6 Prompt/编排/CI | 部分完成（Prompt eval 记录、graph_templates、SARIF、replay、webhook HMAC、工具循环） | 同上 | 控制面 API/工具循环/webhook 测试；A/B 自动评测与编排 UI 待续 | — |
-| M6.7 P1/P2 | 部分完成（usage/audit/health/artifacts 页面；通知/多租户/AI 辅助待续） | requirements-v2 §5.2 | 按 P1/P2 排期 | — |
+| M6.6 Prompt/编排/CI | 部分完成（Prompt A/B + 自动评测、graph_templates、SARIF/replay、webhook HMAC、工具循环） | doc/2026-10-22-prompt-ab-eval-spec.md | 控制面/评测/工具循环/webhook 测试；编排 UI/对比图待续 | 本轮提交 |
+| M6.7 P1/P2 | 部分完成（AI 助手、知识库统计/检索/导入、审查评论、保留清理、SDK、usage/audit/health） | doc/2026-10-22-platform-extras.md、doc/2026-10-22-ai-assist-spec.md | 多租户/配额、评论 UI、通知渠道待续 | 本轮提交 |

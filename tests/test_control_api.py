@@ -190,6 +190,61 @@ def test_prompt_eval_run(monkeypatch):
     assert m["n"] == 2 and "recall" in m and "ece" in m
 
 
+def test_assist_ask(monkeypatch):
+    class FakeLLM:
+        def complete(self, system, user, model_role="deep"):
+            return "根据证据，该 finding 可达。"
+
+    monkeypatch.setattr(
+        "codesentry.agents.llm.LLMClient.for_agent",
+        classmethod(lambda cls, *a, **k: FakeLLM()),
+    )
+    r = client.post("/api/assist/ask", json={"question": "这个 SSRF 可信吗？", "scan_id": 999999})
+    assert r.status_code == 200, r.text
+    assert "可达" in r.json()["answer"]
+    assert isinstance(r.json()["sources"], list)
+
+
+def test_kb_ops_and_comments():
+    src = f"unit-kb-{uuid.uuid4().hex[:6]}"
+    assert client.get("/api/kb/stats").status_code == 200
+    assert client.post("/api/kb/import", json={
+        "source": src, "title": "t", "content": "第一段关于 SSRF。\n\n第二段关于 SQL 注入。",
+    }).status_code == 200
+    rows = client.post("/api/kb/search", json={"query": "SSRF"}).json()["rows"]
+    assert isinstance(rows, list)
+    r = client.post("/api/scans", data={"diff_text": "x"})
+    sid = r.json()["scan_id"]
+    try:
+        c = client.post(f"/api/scans/{sid}/comments", json={"body": "复核备注", "author": "unit"})
+        assert c.status_code == 200
+        assert client.get(f"/api/scans/{sid}/comments").json()["comments"]
+    finally:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM review_comments WHERE scan_id=%s", (sid,))
+            cur.execute("DELETE FROM findings WHERE scan_id=%s", (sid,))
+            cur.execute("DELETE FROM node_runs WHERE scan_id=%s", (sid,))
+            cur.execute("DELETE FROM budget_ledger WHERE scan_id=%s", (sid,))
+            cur.execute("DELETE FROM scans WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM kb_chunks WHERE source=%s", (src,))
+            conn.commit()
+
+
+def test_retention_and_disk():
+    assert client.get("/api/ops/disk").status_code == 200
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scans (repo_path, license_oss, license_declared_at, created_at)"
+            " VALUES ('/tmp/retention-unit',false,now(), now() - interval '3 days') RETURNING id"
+        )
+        sid = int(cur.fetchone()[0]); c.commit()
+    r = client.post("/api/ops/retention", json={"days": 1})
+    assert r.status_code == 200 and r.json()["deleted"] >= 1
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT count(*) FROM scans WHERE id=%s", (sid,))
+        assert int(cur.fetchone()[0]) == 0
+
+
 def test_health():
     h = client.get("/api/health").json()
     assert "db" in h and "engines" in h and "queue" in h

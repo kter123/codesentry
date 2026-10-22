@@ -633,7 +633,7 @@ CodeSentry 是基于 **LangGraph** 的 LLM 多智能体源码安全审计平台�
 | M6.7 平台化增强 | 用量看板、健康运维、知识库、AI 辅助、通知、体验、配额 | FR-25/31/32/33/35/36/38/40/42/44 | 关键页面可用；配额与通知生效 |
 | M6.8 验收与加固 | 全量测试、安全测试、性能压测、文档 | 全部 | 测试全绿；红线检查通过 |
 
-**实现进展（2026-10-22）**：M6.0 与 M6.1 后端基座已完成。M6.2 沙箱部署已真实验证（scan 612/637 `ready`、127.0.0.1 端口、target 200、清理）；M6.3 PoC canary 已真实验证（scan 613 命令回显命中 nonce）；M6.4 Artifacts/tool_trace/置信度已完成；M6.5 Vue 3 控制台（审查链 tab、实时 Agent 事件）已完成；M6.6 编排/评测/webhook/工具循环部分完成；M3.5 RAG 五库 + GraphRAG 最小闭环已完成（经验检索进入 Triage/PoC/Recon，复核沉淀案例；仅 Python 图/无向量重排）。多租户、AI 辅助、知识库运营、数据生命周期、SDK、审查协作待续。
+**实现进展（2026-10-22）**：M6.0–M6.5 已完成（控制面、沙箱部署、PoC canary、Artifacts/置信度、Vue3 控制台）；M6.6 完成 Prompt A/B 与自动评测、graph_templates、SARIF/replay、webhook、工具循环；M3.5 RAG 五库+GraphRAG 最小闭环完成；M6.7 完成 Ask CodeSentry、知识库统计/检索/导入、审查评论、保留清理、Python SDK、usage/audit/health。剩余：多租户/配额、通知渠道（邮件/Slack/飞书已排除）、编排 UI/A-B 对比图/Copilot/评论 UI、向量检索重建。
 
 ### 10.2 需求追踪
 | 需求组 | 设计规格 | 里程碑 |
