@@ -88,6 +88,24 @@ def get_version(agent: str, version: int) -> dict | None:
         return None
 
 
+def pick_version(agent: str, scan_id: int | None = None) -> tuple[int | None, str]:
+    """A/B 分流：按 scan_id + agent 稳定分桶；未启用时返回 active 版本。"""
+    try:
+        from codesentry.control.agent_config import get_agent_config
+
+        ab = (get_agent_config(agent).get("ab_json") or {})
+        if ab.get("enabled") and ab.get("a") and ab.get("b"):
+            ratio = float(ab.get("ratio", 0.5))
+            bucket = ((int(scan_id or 0) * 31 + sum(ord(c) for c in agent)) % 100) / 100.0
+            if bucket < ratio:
+                return int(ab["b"]), "b"
+            return int(ab["a"]), "a"
+    except Exception:  # noqa: BLE001, S110
+        pass
+    active = get_active(agent)
+    return (int(active["version"]) if active else None), "active"
+
+
 def get_active(agent: str) -> dict | None:
     try:
         from codesentry.control.bootstrap import ensure_control_schema

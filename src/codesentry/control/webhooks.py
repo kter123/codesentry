@@ -48,7 +48,7 @@ def create_webhook(url: str, secret: str = "", events: list[str] | None = None,
             conn.commit()
         audit_write(actor, "create", "webhook", str(wid), None, {"url": url, "events": events})
         return {"id": wid, "url": url, "events": events or ["*"]}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if isinstance(e, ValueError):
             raise
         return None

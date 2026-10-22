@@ -137,7 +137,16 @@ class ScanOut(BaseModel):
 def _insert_scan(repo_path: str, oss: bool) -> int:
     from codesentry.control.snapshots import build_scan_snapshot, snapshot_json
 
-    snapshot = build_scan_snapshot()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scans (repo_path, license_oss, license_declared_at, mode, status)"
+            " VALUES (%s,%s,%s,'full','running') RETURNING id",
+            (repo_path, oss, datetime.now(UTC)),
+        )
+        scan_id = int(cur.fetchone()[0])
+        conn.commit()
+
+    snapshot = build_scan_snapshot(scan_id)
     prompt_snap, skill_snap, llm_snap = snapshot_json(snapshot)
     profile_ids = [
         v.get("profile_id") for v in snapshot.get("llm_snapshot", {}).values() if v.get("profile_id")
@@ -145,15 +154,11 @@ def _insert_scan(repo_path: str, oss: bool) -> int:
     default_pid = int(profile_ids[0]) if profile_ids else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO scans (repo_path, license_oss, license_declared_at, mode, status,"
-            " prompt_snapshot, skill_snapshot, llm_snapshot, llm_profile_id, graph_snapshot)"
-            " VALUES (%s,%s,%s,'full','running',%s,%s,%s,%s,%s) RETURNING id",
-            (
-                repo_path, oss, datetime.now(UTC), prompt_snap, skill_snap, llm_snap,
-                default_pid, '{"template": "default", "version": 1}',
-            ),
+            "UPDATE scans SET prompt_snapshot=%s, skill_snapshot=%s, llm_snapshot=%s,"
+            " llm_profile_id=%s, graph_snapshot=%s WHERE id=%s",
+            (prompt_snap, skill_snap, llm_snap, default_pid,
+             '{"template": "default", "version": 1}', scan_id),
         )
-        scan_id = cur.fetchone()[0]
         conn.commit()
     return scan_id
 
@@ -239,6 +244,8 @@ async def _start_pump() -> None:
     import json as _json
 
     async def pump() -> None:
+        from codesentry.orchestrator.events import drain, room_ids
+
         while True:
             for sid, items in list(hub._pending.items()):
                 cons = hub.rooms.get(sid, set())
@@ -247,6 +254,14 @@ async def _start_pump() -> None:
                     for ws in list(cons):
                         try:
                             await ws.send_text(_json.dumps(payload) if isinstance(payload, dict) else payload)
+                        except Exception:  # noqa: BLE001
+                            hub.leave(sid, ws)
+            for sid in room_ids():
+                events = drain(sid)
+                for event in events:
+                    for ws in list(hub.rooms.get(sid, set())):
+                        try:
+                            await ws.send_text(_json.dumps(event, ensure_ascii=False))
                         except Exception:  # noqa: BLE001
                             hub.leave(sid, ws)
             await asyncio.sleep(0.5)

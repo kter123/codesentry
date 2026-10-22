@@ -45,7 +45,7 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
 _EDITABLE = {
     "enabled", "model_role", "llm_profile_id", "display_name",
     "capabilities", "timeout_s", "max_iterations", "temperature_override",
-    "budget_override",
+    "budget_override", "ab_json",
 }
 
 
@@ -62,6 +62,7 @@ def _default(name: str) -> dict[str, Any]:
         "max_iterations": d["max_iterations"],
         "temperature_override": None,
         "budget_override": {},
+        "ab_json": {},
     }
 
 
@@ -102,7 +103,7 @@ def get_agent_config(name: str) -> dict[str, Any]:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT enabled, model_role, llm_profile_id, display_name, capabilities,"
-                " timeout_s, max_iterations, temperature_override, budget_override"
+                " timeout_s, max_iterations, temperature_override, budget_override, ab_json"
                 " FROM agent_configs WHERE name=%s",
                 (name,),
             )
@@ -118,6 +119,7 @@ def get_agent_config(name: str) -> dict[str, Any]:
                 "max_iterations": int(row[6] or out["max_iterations"]),
                 "temperature_override": row[7],
                 "budget_override": row[8] or {},
+                "ab_json": row[9] or {},
             })
     except Exception:  # noqa: BLE001, S110
         pass
@@ -151,7 +153,7 @@ def update_agent_config(name: str, patch: dict, actor: str = "system") -> dict[s
         vals: list[Any] = []
         for k, v in payload.items():
             sets.append(f"{k}=%s")
-            vals.append(json.dumps(v) if k in ("capabilities", "budget_override") else v)
+            vals.append(json.dumps(v) if k in ("capabilities", "budget_override", "ab_json") else v)
         sets.append("updated_at=now()")
         vals.append(name)
         with get_conn() as conn, conn.cursor() as cur:

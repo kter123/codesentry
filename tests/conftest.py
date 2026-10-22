@@ -42,3 +42,5 @@ def _no_live_llm(request, monkeypatch):
         "CODESENTRY_DEEP_MODEL",
     ):
         monkeypatch.setenv(key, "")
+    monkeypatch.setenv("CODESENTRY_DEPLOY_ENABLED", "false")
+    monkeypatch.setenv("CODESENTRY_DEPLOY_KEEP", "false")

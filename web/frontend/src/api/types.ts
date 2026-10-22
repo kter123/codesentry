@@ -83,6 +83,10 @@ export interface FindingDetail extends GraphFinding {
   exploit_chain?: unknown
   poc_path?: string
   execution_log?: string
+  verification_method?: string
+  verification_nonce?: string
+  confidence_parts?: unknown
+  tool_trace?: unknown
 }
 
 export interface UsageRow {

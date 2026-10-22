@@ -193,6 +193,7 @@ class AgentPatch(BaseModel):
     max_iterations: int | None = None
     temperature_override: float | None = None
     budget_override: dict | None = None
+    ab_json: dict | None = None
 
 
 @app.get("/api/agents/{name}")

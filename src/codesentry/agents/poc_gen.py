@@ -39,7 +39,8 @@ def check_payload_safety(poc_script: str) -> tuple[bool, str]:
     return True, ""
 
 
-def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None) -> dict:
+def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None,
+            tools=None, max_iterations: int = 8) -> dict:
     cwe = int(finding.get("cwe") or 0)
     kind = "http" if cwe in HTTP_CWES else "local"
     user = json.dumps({"finding": finding, "evidence": evidence}, ensure_ascii=False)[:10000]
@@ -47,7 +48,15 @@ def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None) -> di
         system = system.rstrip() + "\n\n" + _DEFAULT_SYSTEM
     system = system or _DEFAULT_SYSTEM
     try:
-        text = llm.complete(system, user, model_role="deep")
+        if tools:
+            from codesentry.agents.tools import run_tool_loop
+
+            text, trace = run_tool_loop(
+                llm, system, user, tools=tools, max_iterations=max_iterations, model_role="deep"
+            )
+        else:
+            text = llm.complete(system, user, model_role="deep")
+            trace = []
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if m:
             d = json.loads(m.group(0))
@@ -56,14 +65,14 @@ def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None) -> di
             safe, reason = check_payload_safety(script)
             if not safe:
                 return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
-                        "notes": reason, "rejected": True}
+                        "notes": reason, "rejected": True, "tool_trace": trace}
             return {"exploit_chain": chain, "poc_script": script, "poc_kind": kind,
-                    "notes": d.get("notes", ""), "rejected": False}
+                    "notes": d.get("notes", ""), "rejected": False, "tool_trace": trace}
         return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
-                "notes": "LLM 输出不可解析", "rejected": False}
+                "notes": "LLM 输出不可解析", "rejected": False, "tool_trace": trace}
     except Exception as e:  # noqa: BLE001 - 生成失败 → finding 保留 + plausible + 原因（§10）
         return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
-                "notes": f"生成失败：{str(e)[:80]}", "rejected": False}
+                "notes": f"生成失败：{str(e)[:80]}", "rejected": False, "tool_trace": []}
 
 
 def execute_poc_local(poc_script: str, work_dir: str, timeout: int = 60) -> dict:
@@ -136,6 +145,13 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
             mode = "off"
 
     system = runtime.system() if runtime is not None else None
+    try:
+        from codesentry.agents.tools import build_tools
+
+        tools = build_tools(state)
+    except Exception:  # noqa: BLE001
+        tools = {}
+    max_iterations = int(getattr(runtime, "max_iterations", 8) or 8)
     work = Path(get_settings().work_dir)
     poc_results: dict[str, dict] = {}
     updated: list[dict] = []
@@ -149,19 +165,23 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
             }
             updated.append({**t, "poc": poc_results[key]})
             continue
-        gen = gen_poc(llm, fdict, (state.get("evidence") or {}).get(key, {}), system=system) if llm \
-            else {"exploit_chain": [], "poc_script": "", "poc_kind": "local",
-                  "notes": "no llm", "rejected": False}
+        gen = gen_poc(
+            llm, fdict, (state.get("evidence") or {}).get(key, {}),
+            system=system, tools=tools, max_iterations=max_iterations,
+        ) if llm else {"exploit_chain": [], "poc_script": "", "poc_kind": "local",
+                       "notes": "no llm", "rejected": False, "tool_trace": []}
         script = str(gen.get("poc_script") or "")
         if gen.get("rejected"):
             poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "",
-                                "verdict": "plausible", "execution_log": gen["notes"]}
+                                "verdict": "plausible", "execution_log": gen["notes"],
+                                "tool_trace": gen.get("tool_trace", [])}
             updated.append({**t, "poc": poc_results[key]})
             continue
         if not script:
             poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "",
                                 "verdict": "plausible",
-                                "execution_log": f"生成失败：{gen['notes']}"}
+                                "execution_log": f"生成失败：{gen['notes']}",
+                                "tool_trace": gen.get("tool_trace", [])}
             updated.append({**t, "poc": poc_results[key]})
             continue
         poc_dir = work / "poc"
@@ -195,6 +215,7 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
             "exploit_chain": gen["exploit_chain"], "poc_file": poc_file,
             "verdict": verdict, "execution_log": log,
             "verification_method": method, "verification_nonce": nonce,
+            "tool_trace": gen.get("tool_trace", []),
         }
         updated.append({**t, "poc": poc_results[key]})
     return {"poc_results": poc_results, "triaged_findings": updated,

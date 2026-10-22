@@ -134,6 +134,55 @@
             </div>
           </el-tab-pane>
 
+          <el-tab-pane label="审查链" name="artifacts">
+            <div class="toolbar">
+              <el-button size="small" :loading="artifactLoading" @click="loadArtifacts">刷新</el-button>
+              <el-button size="small" :disabled="!artifacts.length" @click="verifyArtifacts">
+                哈希链校验
+              </el-button>
+              <status-tag v-if="artifactVerify" :status="artifactVerify.ok ? 'ok' : 'failed'" />
+              <span class="muted">{{ artifacts.length }} 个节点产物</span>
+            </div>
+            <el-timeline v-if="artifacts.length">
+              <el-timeline-item
+                v-for="a in artifacts"
+                :key="a.seq"
+                :timestamp="a.created_at"
+                placement="top"
+              >
+                <div class="timeline-card">
+                  <div class="timeline-head">
+                    <strong>{{ a.node }}</strong>
+                    <span class="muted mono">#{{ a.seq }}</span>
+                    <span class="muted mono">{{ a.model || '—' }}</span>
+                    <span class="muted mono">{{ a.tokens }} tokens</span>
+                  </div>
+                  <el-collapse>
+                    <el-collapse-item title="输入摘要" :name="`in-${a.seq}`">
+                      <pre class="pre-block light">{{ a.input_preview }}</pre>
+                    </el-collapse-item>
+                    <el-collapse-item title="输出摘要" :name="`out-${a.seq}`">
+                      <pre class="pre-block light">{{ a.output_preview }}</pre>
+                    </el-collapse-item>
+                  </el-collapse>
+                </div>
+              </el-timeline-item>
+            </el-timeline>
+            <el-empty v-else description="暂无审查链产物（扫描完成或进行中后刷新）" :image-size="70" />
+            <div v-if="liveEvents.length" class="panel" style="margin-top: 14px">
+              <h2 class="panel-title">实时 Agent 事件</h2>
+              <div
+                v-for="(e, i) in liveEvents.slice(-12)"
+                :key="i"
+                class="mono muted"
+                style="font-size: 12px; padding: 2px 0"
+              >
+                {{ e.event }} · {{ e.node || '' }} · {{ e.status || '' }}
+                <span v-if="e.tokens">· {{ e.tokens }} tokens</span>
+              </div>
+            </div>
+          </el-tab-pane>
+
           <el-tab-pane label="调用图" name="graph">
             <template v-if="graph">
               <div class="toolbar">
@@ -256,6 +305,24 @@
           <json-block :value="selected.taint_metadata ?? null" />
           <json-block :value="selected.exploit_chain ?? null" />
 
+          <template v-if="selected.confidence_parts">
+            <h3 class="panel-title" style="margin-top: 18px">置信度分解</h3>
+            <json-block :value="selected.confidence_parts" />
+          </template>
+
+          <template v-if="selected.tool_trace">
+            <h3 class="panel-title" style="margin-top: 18px">Agent 工具轨迹</h3>
+            <json-block :value="selected.tool_trace" />
+          </template>
+
+          <template v-if="selected.verification_method">
+            <h3 class="panel-title" style="margin-top: 18px">PoC 实证</h3>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="方法">{{ selected.verification_method }}</el-descriptions-item>
+              <el-descriptions-item label="Nonce">{{ selected.verification_nonce || '—' }}</el-descriptions-item>
+            </el-descriptions>
+          </template>
+
           <template v-if="selected.execution_log">
             <h3 class="panel-title" style="margin-top: 18px">执行日志</h3>
             <pre class="pre-block">{{ selected.execution_log }}</pre>
@@ -298,6 +365,25 @@ interface SourceLine {
   text: string
 }
 
+interface ArtifactRow {
+  seq: number
+  node: string
+  input_preview: string
+  output_preview: string
+  model: string
+  tokens: number
+  prev_sha256: string
+  created_at: string
+}
+
+interface LiveEvent {
+  event: string
+  node?: string
+  status?: string
+  tokens?: number
+  duration_ms?: number
+}
+
 const route = useRoute()
 const scanId = computed(() => Number(route.params.id))
 
@@ -316,6 +402,11 @@ const drawer = ref(false)
 const selected = ref<FindingDetail | null>(null)
 const detailLoading = ref(false)
 const sourceLines = ref<SourceLine[]>([])
+const artifacts = ref<ArtifactRow[]>([])
+const artifactVerify = ref<{ ok: boolean; count?: number; broken_at?: number } | null>(null)
+const artifactLoading = ref(false)
+const liveEvents = ref<LiveEvent[]>([])
+let socket: WebSocket | undefined
 
 let pollTimer: number | undefined
 
@@ -329,6 +420,59 @@ function fmtDuration(ms?: number): string {
   if (ms === undefined || ms === null) return '—'
   if (ms < 1000) return `${ms} ms`
   return `${(ms / 1000).toFixed(2)} s`
+}
+
+async function loadArtifacts(): Promise<void> {
+  artifactLoading.value = true
+  try {
+    const res = await api.get<{ artifacts?: ArtifactRow[] }>(
+      `/api/scans/${scanId.value}/artifacts`,
+    )
+    artifacts.value = Array.isArray(res?.artifacts) ? res.artifacts : []
+  } catch {
+    artifacts.value = []
+  } finally {
+    artifactLoading.value = false
+  }
+}
+
+async function verifyArtifacts(): Promise<void> {
+  try {
+    artifactVerify.value = await api.get<{ ok: boolean; count?: number; broken_at?: number }>(
+      `/api/scans/${scanId.value}/artifacts/verify`,
+    )
+  } catch (e) {
+    artifactVerify.value = { ok: false }
+    error.value = `审查链校验失败：${errorMessage(e)}`
+  }
+}
+
+function connectSocket(): void {
+  if (!Number.isFinite(scanId.value) || scanId.value <= 0) return
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  socket = new WebSocket(`${proto}://${window.location.host}/ws/scans/${scanId.value}`)
+  socket.onmessage = (message) => {
+    try {
+      const event = JSON.parse(message.data) as LiveEvent
+      liveEvents.value.push(event)
+      if (liveEvents.value.length > 100) liveEvents.value.shift()
+      if (event.event === 'node.start' && event.node) {
+        timelineNodes.value.push({ node: event.node, status: 'running', tokens: 0 } as NodeRun)
+      }
+      if (event.event === 'node.end' && event.node) {
+        const existing = timelineNodes.value.find(
+          (node) => node.node === event.node && node.status === 'running',
+        )
+        if (existing) {
+          existing.status = event.status || 'ok'
+          existing.duration_ms = event.duration_ms
+          existing.tokens = event.tokens || 0
+        }
+      }
+    } catch {
+      // 忽略非 JSON 消息
+    }
+  }
 }
 
 function normalizeFindings(payload: unknown): GraphFinding[] | null {
@@ -427,6 +571,7 @@ async function load(silent = false): Promise<void> {
   }
 
   if (!silent) loading.value = false
+  void loadArtifacts()
   schedulePoll()
 }
 
@@ -458,9 +603,19 @@ async function openFinding(row: GraphFinding): Promise<void> {
   detailLoading.value = false
 }
 
-watch(scanId, () => void load())
-onMounted(() => void load())
-onUnmounted(clearPoll)
+watch(scanId, () => {
+  socket?.close()
+  void load()
+  connectSocket()
+})
+onMounted(() => {
+  void load()
+  connectSocket()
+})
+onUnmounted(() => {
+  socket?.close()
+  clearPoll()
+})
 </script>
 
 <style scoped>

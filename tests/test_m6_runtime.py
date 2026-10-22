@@ -7,7 +7,13 @@ from codesentry.control import calibration
 from codesentry.db.pool import get_conn
 from codesentry.orchestrator.artifacts import list_artifacts, verify_chain, write_artifact
 from codesentry.orchestrator.graph import build_graph
-from codesentry.sandbox.deploy import DeployResult, detect_recipe, run_deploy
+from codesentry.sandbox.deploy import (
+    DeployResult,
+    detect_port,
+    detect_recipe,
+    resolve_project_root,
+    run_deploy,
+)
 from codesentry.sandbox.verify import CanaryResult, CanaryVerifier
 
 
@@ -19,17 +25,37 @@ def test_detect_recipe(tmp_path):
     assert detect_recipe(str(php)) == "php"
 
 
-def test_run_deploy_off_is_built(monkeypatch, tmp_path):
+def test_run_deploy_off_still_deploys_by_default(monkeypatch, tmp_path):
     (tmp_path / "app.py").write_text("x=1")
-    monkeypatch.setenv("CODESENTRY_POC_RUN", "off")
+    monkeypatch.setenv("CODESENTRY_DEPLOY_ENABLED", "true")
+    monkeypatch.setattr(
+        "codesentry.sandbox.deploy.DockerDeployer.deploy",
+        lambda self: DeployResult("ready", "ok", "http://127.0.0.1:1234/", "cid", "net"),
+    )
     s = new_state(str(tmp_path), OSS=False, scan_id=1)
     u = run_deploy(s)
-    assert u["deploy_status"] == "built"
-    assert u["phase"] == "poc_gen"
+    assert u["deploy_status"] == "ready"
+
+
+def test_run_deploy_can_be_disabled(monkeypatch, tmp_path):
+    (tmp_path / "app.py").write_text("x=1")
+    monkeypatch.setenv("CODESENTRY_DEPLOY_ENABLED", "false")
+    s = new_state(str(tmp_path), OSS=False, scan_id=1)
+    u = run_deploy(s)
+    assert u["deploy_status"] == "disabled"
+
+
+def test_resolve_project_root_and_port(tmp_path):
+    nested = tmp_path / "pkg" / "web"
+    nested.mkdir(parents=True)
+    (nested / "Dockerfile").write_text("FROM nginx\nEXPOSE 9000\n")
+    assert resolve_project_root(str(tmp_path)) == nested
+    assert detect_port(nested, 8080) == 9000
 
 
 def test_run_deploy_ready(monkeypatch, tmp_path):
     (tmp_path / "app.py").write_text("x=1")
+    monkeypatch.setenv("CODESENTRY_DEPLOY_ENABLED", "true")
     monkeypatch.setattr(
         "codesentry.sandbox.deploy.DockerDeployer.deploy",
         lambda self: DeployResult("ready", "ok", "http://127.0.0.1:1234/", "cid", "net"),

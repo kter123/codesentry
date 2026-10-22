@@ -12,6 +12,8 @@ VERDICTS = ("keep", "demote", "reject")
 _DEFAULT_SYSTEM = (
     "你是代码安全审计 TriageAgent。输入一个 finding 和证据切片。"
     "判断：reachable（污点可达）/ unreachable / uncertain，并给置信度 0-1 与修复建议。"
+    "如需更多证据，可输出 {\"tool_calls\": [{\"tool\": \"read_source\", \"args\": {\"path\": \"a.py\", \"start\": 1, \"end\": 80}}]}；"
+    "可用工具：read_source、search_code、read_evidence。获得足够证据后输出最终 JSON。"
     '只输出 JSON：{"verdict": "keep|demote|reject", "confidence": 0.0-1.0,'
     ' "rationale": "一句中理由", "fix_advice": "修复建议"}'
 )
@@ -28,7 +30,7 @@ def _parse_triage_json(text: str) -> dict | None:
 
 
 def triage_one(llm, finding: dict, evidence: dict, kb: list[dict] | None = None,
-               system: str | None = None) -> dict:
+               system: str | None = None, tools=None, max_iterations: int = 8) -> dict:
     """对单个 finding 调 LLM 验证。输出 dict 含 verdict/confidence/rationale/fix_advice。"""
     user = json.dumps(
         {"finding": finding, "evidence": evidence.get("code", [])[:5], "kb": (kb or [])[:3]},
@@ -38,13 +40,22 @@ def triage_one(llm, finding: dict, evidence: dict, kb: list[dict] | None = None,
         system = system.rstrip() + "\n\n" + _DEFAULT_SYSTEM
     system = system or _DEFAULT_SYSTEM
     try:
-        text = llm.complete(system, user, model_role="deep")
+        if tools:
+            from codesentry.agents.tools import run_tool_loop
+
+            text, trace = run_tool_loop(
+                llm, system, user, tools=tools, max_iterations=max_iterations, model_role="deep"
+            )
+        else:
+            text = llm.complete(system, user, model_role="deep")
+            trace = []
         parsed = _parse_triage_json(text)
         if parsed and parsed.get("verdict") in VERDICTS:
+            parsed["tool_trace"] = trace
             return parsed
         return {"verdict": "keep", "confidence": 0.4,
                 "rationale": "LLM 输出不可解析——按保守未验证保留",
-                "fix_advice": finding.get("message", "")}
+                "fix_advice": finding.get("message", ""), "tool_trace": trace}
     except Exception as e:  # noqa: BLE001 - LLM 失败必须保留引擎原始结论（§10）
         return {"verdict": "keep", "confidence": 0.3,
                 "rationale": f"未验证（LLM 失败：{str(e)[:60]}）", "fix_advice": ""}
@@ -96,13 +107,23 @@ def run_triage(state: Any, llm=None, runtime=None) -> dict:
     except Exception:  # noqa: BLE001
         calibrate = compute = evidence_score = None  # type: ignore[assignment]
         calib = {"a": 1.0, "b": 0.0}
+    try:
+        from codesentry.agents.tools import build_tools
+
+        tools = build_tools(state)
+    except Exception:  # noqa: BLE001
+        tools = {}
+    max_iterations = int(getattr(runtime, "max_iterations", 8) or 8)
     for f in findings:
         key = str(f.get("rule_id")) + "@" + str(f.get("line"))
         if llm is None:
             t = {"verdict": "keep", "confidence": float(f.get("confidence") or 0.5),
                  "rationale": "无 LLM（M3 mock 模式）——保留", "fix_advice": ""}
         else:
-            t = triage_one(llm, f, evd.get(key, {}), system=system)
+            t = triage_one(
+                llm, f, evd.get(key, {}), system=system,
+                tools=tools, max_iterations=max_iterations,
+            )
         if compute is not None and evidence_score is not None and calibrate is not None:
             ev = evidence_score(evd.get(key, {}), has_chain=bool(evd.get(key, {}).get("taint_chain")))
             raw_val = t.get("confidence")

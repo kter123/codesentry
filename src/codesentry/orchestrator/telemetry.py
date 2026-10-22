@@ -24,6 +24,13 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
     error = ""
     run = NodeRun(tokens=tokens, tool_calls=tool_calls)
     try:
+        from codesentry.orchestrator.events import publish
+
+        publish(scan_id, {"event": "node.start", "scan_id": scan_id, "node": node,
+                          "at": start_at.isoformat()})
+    except Exception:  # noqa: BLE001
+        publish = None  # type: ignore[assignment]
+    try:
         yield run
     except Exception as e:
         status = "failed"
@@ -48,3 +55,12 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
                 conn.commit()
         except Exception:  # noqa: BLE001, S110 - 遥测写入失败不阻塞主流程（扫描结果另落表）
             pass
+        if publish is not None:
+            try:
+                publish(scan_id, {
+                    "event": "node.end", "scan_id": scan_id, "node": node,
+                    "status": status, "duration_ms": duration_ms,
+                    "tokens": run.tokens or 0, "error": error,
+                })
+            except Exception:  # noqa: BLE001, S110
+                pass

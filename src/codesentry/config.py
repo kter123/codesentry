@@ -35,9 +35,16 @@ class Settings(BaseSettings):
     poc_run: Literal["off", "sandbox", "target"] = "off"
 
     # M6.2 sandbox deploy
+    deploy_enabled: bool = True
+    deploy_network_mode: Literal["host", "internal"] = "host"
+    deploy_port: int = 8080
+    deploy_keep: bool = False
     deploy_timeout_s: int = 120
     deploy_mem_mb: int = 512
     deploy_cpu: float = 1.0
+    deploy_python_image: str = "python:3.12-slim"
+    deploy_php_image: str = "php:8.3-cli"
+    deploy_javascript_image: str = "node:20-slim"
 
     # web (D36 修订：默认仅回环；绑定外部地址需显式配置认证)
     web_bind: str = "127.0.0.1"

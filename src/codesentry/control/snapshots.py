@@ -6,12 +6,12 @@ import json
 from typing import Any
 
 
-def build_scan_snapshot() -> dict[str, dict]:
+def build_scan_snapshot(scan_id: int | None = None) -> dict[str, dict]:
     from codesentry.agents.prompts import load_prompt
     from codesentry.agents.state import AGENT_NAMES
     from codesentry.control.bootstrap import ensure_control_schema
     from codesentry.control.profiles import resolve_profile
-    from codesentry.control.prompts import get_active
+    from codesentry.control.prompts import get_version, pick_version
     from codesentry.control.skills import snapshot as skill_snapshot
 
     if not ensure_control_schema():
@@ -21,16 +21,19 @@ def build_scan_snapshot() -> dict[str, dict]:
     skills: dict[str, Any] = {}
     llms: dict[str, Any] = {}
     for agent in AGENT_NAMES:
-        active = get_active(agent)
-        if active:
+        version, arm = pick_version(agent, scan_id)
+        pv = get_version(agent, version) if version else None
+        if pv:
             prompts[agent] = {
-                "version": active["version"],
-                "sha256": active.get("body_sha256", ""),
+                "version": pv["version"],
+                "sha256": pv.get("body_sha256", ""),
                 "fallback": False,
+                "ab_arm": arm,
             }
         else:
-            _text, version, fallback = load_prompt(agent)
-            prompts[agent] = {"version": version, "sha256": "", "fallback": fallback}
+            _text, seed_version, fallback = load_prompt(agent)
+            prompts[agent] = {"version": seed_version, "sha256": "", "fallback": fallback,
+                              "ab_arm": arm}
         items = skill_snapshot(agent)
         skills[agent] = items
         profile, source = resolve_profile(agent)

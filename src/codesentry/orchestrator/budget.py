@@ -23,11 +23,19 @@ class BudgetGuard:
         self.tokens = 0
         self.tool_calls = 0
         self.cost_usd = 0.0
+        self.agent_tokens: dict[str, int] = {}
+        self.agent_cost: dict[str, float] = {}
+        self.agent_calls: dict[str, int] = {}
 
-    def record(self, *, tokens: int = 0, tool_calls: int = 0, cost_usd: float = 0.0, phase: str = "") -> None:
+    def record(self, *, tokens: int = 0, tool_calls: int = 0, cost_usd: float = 0.0,
+               phase: str = "", agent: str = "") -> None:
         self.tokens += tokens
         self.tool_calls += tool_calls
         self.cost_usd += cost_usd
+        if agent:
+            self.agent_tokens[agent] = self.agent_tokens.get(agent, 0) + tokens
+            self.agent_cost[agent] = self.agent_cost.get(agent, 0.0) + cost_usd
+            self.agent_calls[agent] = self.agent_calls.get(agent, 0) + tool_calls
         try:
             with get_conn() as conn:
                 conn.execute(
@@ -53,6 +61,19 @@ class BudgetGuard:
     def breached(self) -> bool:
         return self.phase_now() is BudgetPhase.BREACH
 
+    def over_agent(self, agent: str, override: dict | None) -> bool:
+        """按 Agent 覆写预算判断是否已超限。"""
+        if not override:
+            return False
+        max_tokens = int(override.get("max_tokens") or 0)
+        max_cost = float(override.get("max_cost_usd") or 0.0)
+        max_calls = int(override.get("max_tool_calls") or 0)
+        return bool(
+            (max_tokens and self.agent_tokens.get(agent, 0) >= max_tokens)
+            or (max_cost and self.agent_cost.get(agent, 0.0) >= max_cost)
+            or (max_calls and self.agent_calls.get(agent, 0) >= max_calls)
+        )
+
     def to_state(self) -> dict:
         p = self.phase_now()
         return {
@@ -60,4 +81,9 @@ class BudgetGuard:
             "tool_calls": self.tool_calls,
             "cost_usd": self.cost_usd,
             "phase": p.value,
+            "agents": {
+                "tokens": self.agent_tokens,
+                "cost_usd": self.agent_cost,
+                "tool_calls": self.agent_calls,
+            },
         }

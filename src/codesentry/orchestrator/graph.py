@@ -20,6 +20,7 @@ from codesentry.orchestrator.telemetry import node_run
 def _wrap(node_name: str, fn, scan_id_holder: dict):
     def inner(state: AuditState) -> dict:
         sid = scan_id_holder.get("scan_id") or 0
+        bc = scan_id_holder.get("budget")
         if node_name in {"recon", "scan", "retrieval", "report"}:
             try:
                 from codesentry.control.agent_config import get_agent_config
@@ -60,15 +61,33 @@ def _wrap(node_name: str, fn, scan_id_holder: dict):
                 status_override = "skipped"
         elif "llm" in params:
             kwargs["llm"] = None
+        override: dict = {}
+        if runtime is not None:
+            override = getattr(runtime, "budget_override", {}) or {}
+        elif bc is not None:
+            try:
+                from codesentry.control.agent_config import get_agent_config
+
+                override = get_agent_config(node_name).get("budget_override") or {}
+            except Exception:  # noqa: BLE001
+                override = {}
+        if bc is not None and override and bc.over_agent(node_name, override):
+            with node_run(sid, node_name, status_override="skipped"):
+                pass
+            return {
+                "messages": [
+                    *(state.get("messages") or []),
+                    f"{node_name}: agent budget_override exceeded",
+                ]
+            }
         with node_run(sid, node_name, status_override=status_override) as _run:
             update = fn(state, **kwargs)
             tokens_used = _get_last_tokens()
             cost_used = _get_last_cost()
             _run.tokens = tokens_used
-        bc = scan_id_holder.get("budget")
         # LLM token/cost 回流（NFR-2 / 预算熔断）：agents 的 LLMClient 用量进台账
         if bc is not None and (tokens_used or cost_used):
-            bc.record(tokens=tokens_used, cost_usd=cost_used, phase=node_name)
+            bc.record(tokens=tokens_used, cost_usd=cost_used, phase=node_name, agent=node_name)
         if sid:
             try:
                 from codesentry.orchestrator.artifacts import summarize_state, write_artifact

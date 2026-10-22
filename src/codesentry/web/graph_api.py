@@ -116,13 +116,13 @@ async def list_scan_findings(scan_id: int) -> dict:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT id, rule_id, cwe, severity, confidence, file, line, message, engine,
-                      verdict, poc_path, verification_method, confidence_parts
+                      verdict, poc_path, verification_method, confidence_parts, tool_trace
                FROM findings WHERE scan_id=%s ORDER BY id""",
             (scan_id,),
         )
         rows = cur.fetchall()
     cols = ["id", "rule_id", "cwe", "severity", "confidence", "file", "line", "message",
-            "engine", "verdict", "poc_path", "verification_method", "confidence_parts"]
+            "engine", "verdict", "poc_path", "verification_method", "confidence_parts", "tool_trace"]
     return {"scan_id": scan_id, "findings": [dict(zip(cols, r)) for r in rows]}
 
 
@@ -132,7 +132,7 @@ async def get_finding(finding_id: int) -> dict:
         cur.execute(
             """SELECT id, scan_id, rule_id, cwe, severity, confidence, file, line, message, engine,
                       taint_metadata, exploit_chain, poc_path, verdict, execution_log,
-                      verification_method, verification_nonce, confidence_parts
+                      verification_method, verification_nonce, confidence_parts, tool_trace
                FROM findings WHERE id=%s""",
             (finding_id,),
         )
@@ -141,7 +141,7 @@ async def get_finding(finding_id: int) -> dict:
             raise HTTPException(404)
     cols = ["id", "scan_id", "rule_id", "cwe", "severity", "confidence", "file", "line", "message", "engine",
             "taint_metadata", "exploit_chain", "poc_path", "verdict", "execution_log",
-            "verification_method", "verification_nonce", "confidence_parts"]
+            "verification_method", "verification_nonce", "confidence_parts", "tool_trace"]
     return dict(zip(cols, r))
 
 

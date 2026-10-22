@@ -20,6 +20,8 @@ class AgentRuntime:
     capabilities: dict = field(default_factory=dict)
     model_role: str = "deep"
     profile_id: int | None = None
+    max_iterations: int = 8
+    budget_override: dict = field(default_factory=dict)
 
     def system(self) -> str:
         if self.skills_block:
@@ -187,4 +189,6 @@ def prepare_agent(
         capabilities=capabilities,
         model_role=role,
         profile_id=getattr(llm, "profile_id", None),
+        max_iterations=int(cfg.get("max_iterations") or 8),
+        budget_override=cfg.get("budget_override") or {},
     )
