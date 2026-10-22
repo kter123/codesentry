@@ -174,6 +174,22 @@ def test_graph_templates_and_prompt_evals():
             c.commit()
 
 
+def test_prompt_eval_run(monkeypatch):
+    monkeypatch.setattr(
+        "codesentry.agents.llm.LLMClient.for_agent",
+        classmethod(lambda cls, *a, **k: object()),
+    )
+    monkeypatch.setattr(
+        "codesentry.agents.triage.triage_one",
+        lambda *a, **k: {"verdict": "keep", "confidence": 0.9, "rationale": "r", "fix_advice": ""},
+    )
+    r = client.post("/api/prompts/eval/run",
+                    json={"agent": "triage", "dataset": "selfbuilt", "limit": 2})
+    assert r.status_code == 200, r.text
+    m = r.json()["metrics"]
+    assert m["n"] == 2 and "recall" in m and "ece" in m
+
+
 def test_health():
     h = client.get("/api/health").json()
     assert "db" in h and "engines" in h and "queue" in h

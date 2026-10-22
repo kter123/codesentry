@@ -82,7 +82,17 @@
             <el-button size="small" :disabled="!selectedVersion" @click="activateVersion">激活</el-button>
             <el-button size="small" :disabled="!selectedVersion" @click="rollbackVersion">回滚到此版本</el-button>
             <el-button size="small" @click="openDiff">Diff</el-button>
+            <el-button size="small" :loading="evaluating" :disabled="!selectedVersion" @click="runEval">
+              运行评测
+            </el-button>
           </div>
+          <el-descriptions v-if="evalResult" :column="3" border size="small" style="margin-top: 10px">
+            <el-descriptions-item label="Recall">{{ pct(evalResult.recall) }}</el-descriptions-item>
+            <el-descriptions-item label="Precision">{{ pct(evalResult.precision) }}</el-descriptions-item>
+            <el-descriptions-item label="FP Rate">{{ pct(evalResult.fp_rate) }}</el-descriptions-item>
+            <el-descriptions-item label="ECE">{{ Number(evalResult.ece ?? 0).toFixed(3) }}</el-descriptions-item>
+            <el-descriptions-item label="样本">{{ evalResult.n ?? 0 }}</el-descriptions-item>
+          </el-descriptions>
         </div>
       </el-col>
 
@@ -221,6 +231,8 @@ const selectedVersion = ref<PromptVersion | null>(null)
 const editorBody = ref('')
 const linting = ref(false)
 const lintResult = ref<LintResult | null>(null)
+const evaluating = ref(false)
+const evalResult = ref<Record<string, number> | null>(null)
 
 const createVisible = ref(false)
 const createName = ref('')
@@ -400,6 +412,30 @@ async function rollbackVersion(): Promise<void> {
     await load()
   } catch (e) {
     ElMessage.error(errorMessage(e))
+  }
+}
+
+function pct(value?: number): string {
+  return `${((value ?? 0) * 100).toFixed(1)}%`
+}
+
+async function runEval(): Promise<void> {
+  if (!selectedName.value || !selectedVersion.value) return
+  evaluating.value = true
+  evalResult.value = null
+  try {
+    const res = await api.post<{ metrics?: Record<string, number> }>('/api/prompts/eval/run', {
+      agent: selectedName.value,
+      version: selectedVersion.value.version,
+      dataset: 'selfbuilt',
+      limit: 3,
+    })
+    evalResult.value = res.metrics ?? null
+    ElMessage.success('评测完成（结果已写入 prompt_evals）')
+  } catch (e) {
+    error.value = `评测失败：${errorMessage(e)}`
+  } finally {
+    evaluating.value = false
   }
 }
 

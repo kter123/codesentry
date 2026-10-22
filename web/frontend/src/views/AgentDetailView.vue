@@ -98,6 +98,18 @@
             <el-form-item label="允许的引擎（逗号分隔）">
               <el-input v-model="enginesText" placeholder="semgrep, codeql, joern" />
             </el-form-item>
+            <el-form-item label="Prompt A/B（JSON）">
+              <el-input
+                v-model="abText"
+                class="code-input"
+                type="textarea"
+                :rows="3"
+                placeholder='{"enabled": true, "a": 1, "b": 2, "ratio": 0.5}'
+              />
+              <div class="muted" style="font-size: 12px">
+                开启后按 scan_id 稳定分流；每次扫描快照记录 ab_arm。
+              </div>
+            </el-form-item>
             <el-form-item label="预算覆盖（JSON）">
               <el-input
                 v-model="budgetText"
@@ -308,6 +320,7 @@ const saveError = ref('')
 const form = ref<AgentForm | null>(null)
 const enginesText = ref('')
 const budgetText = ref('{}')
+const abText = ref('{}')
 const temperature = ref<number | null>(null)
 
 const promptInfo = ref<PromptInfo | null>(null)
@@ -336,6 +349,11 @@ function applyConfig(config: AgentConfig): void {
     budgetText.value = JSON.stringify(config.budget_override || {}, null, 2)
   } catch {
     budgetText.value = '{}'
+  }
+  try {
+    abText.value = JSON.stringify((config as unknown as { ab_json?: unknown }).ab_json || {}, null, 2)
+  } catch {
+    abText.value = '{}'
   }
 }
 
@@ -389,6 +407,18 @@ async function save(): Promise<void> {
     return
   }
 
+  let ab: Record<string, unknown>
+  try {
+    const parsed = abText.value.trim() ? JSON.parse(abText.value) : {}
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('A/B 必须是 JSON 对象')
+    }
+    ab = parsed as Record<string, unknown>
+  } catch (e) {
+    saveError.value = `A/B JSON 解析失败：${errorMessage(e)}`
+    return
+  }
+
   const capabilities = {
     ...(config.capabilities || {}),
     engines: enginesText.value
@@ -407,6 +437,7 @@ async function save(): Promise<void> {
     max_iterations: config.max_iterations ?? 8,
     temperature_override: temperature.value,
     budget_override: budget,
+    ab_json: ab,
   }
 
   saving.value = true

@@ -217,6 +217,81 @@ def lint(body: str, max_chars: int = 200_000) -> dict:
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
+EVAL_CASES: list[dict] = [
+    {
+        "finding": {"rule_id": "eval.ssrf", "cwe": 918, "line": 1, "severity": "HIGH",
+                    "message": "user controlled URL passed to requests.get", "file": "app.py"},
+        "evidence": {"code": [{"path": "app.py", "snippet": "requests.get(request.args['url'])"}],
+                     "vuln_cases": [], "patterns": []},
+        "label": "keep",
+    },
+    {
+        "finding": {"rule_id": "eval.sqli", "cwe": 89, "line": 2, "severity": "HIGH",
+                    "message": "sql string concatenation with user input", "file": "db.py"},
+        "evidence": {"code": [{"path": "db.py", "snippet": "cursor.execute('...'+name)"}],
+                     "vuln_cases": [], "patterns": []},
+        "label": "keep",
+    },
+    {
+        "finding": {"rule_id": "eval.safe", "cwe": 89, "line": 3, "severity": "LOW",
+                    "message": "parameterized query", "file": "safe.py"},
+        "evidence": {"code": [{"path": "safe.py", "snippet": "cursor.execute('... WHERE id=%s', (id,))"}],
+                     "vuln_cases": [], "patterns": []},
+        "label": "reject",
+    },
+]
+
+
+def run_prompt_eval(agent: str, version: int | None = None, dataset: str = "selfbuilt",
+                    limit: int = 10) -> dict:
+    """对内置/指定数据集跑真实 Triage，记录 recall/precision/FP/ECE。"""
+    from codesentry.agents.llm import LLMClient, LLMError
+    from codesentry.agents.triage import triage_one
+
+    body = None
+    if version is not None:
+        pv = get_version(agent, version)
+        if not pv:
+            raise ValueError(f"prompt version not found: {agent} v{version}")
+        body = pv["body"]
+    try:
+        llm = LLMClient.for_agent(agent)
+    except Exception as e:
+        raise LLMError(f"LLM 不可用：{e}") from e
+    cases = EVAL_CASES[: max(1, min(int(limit), len(EVAL_CASES)))]
+    tp = fp = tn = fn = 0
+    conf_pairs: list[dict] = []
+    for case in cases:
+        out = triage_one(llm, case["finding"], case["evidence"], system=body)
+        predicted = str(out.get("verdict") or "keep") != "reject"
+        actual = case["label"] == "keep"
+        if predicted and actual:
+            tp += 1
+        elif predicted and not actual:
+            fp += 1
+        elif not predicted and actual:
+            fn += 1
+        else:
+            tn += 1
+        conf_pairs.append({"raw": float(out.get("confidence") or 0.5), "label": 1.0 if actual else 0.0})
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    fp_rate = fp / (fp + tn) if (fp + tn) else 0.0
+    try:
+        from codesentry.control.calibration import ece as _ece
+
+        ece = _ece(conf_pairs, 1.0, 0.0)
+    except Exception:  # noqa: BLE001
+        ece = 0.0
+    metrics = {
+        "recall": recall, "precision": precision, "fp_rate": fp_rate,
+        "false_negatives": fn, "ece": ece, "n": len(cases),
+        "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+    }
+    record_eval(agent, version, dataset, metrics)
+    return {"agent": agent, "version": version, "dataset": dataset, "metrics": metrics}
+
+
 def record_eval(agent: str, version: int | None, dataset: str, metrics: dict) -> bool:
     try:
         from codesentry.control.bootstrap import ensure_control_schema

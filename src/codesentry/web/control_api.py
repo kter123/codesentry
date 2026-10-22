@@ -427,6 +427,27 @@ class EvalPayload(BaseModel):
     metrics: dict = {}
 
 
+class EvalRunPayload(BaseModel):
+    agent: str
+    version: int | None = None
+    dataset: str = "selfbuilt"
+    limit: int = 10
+
+
+@app.post("/api/prompts/eval/run")
+async def run_prompt_eval(payload: EvalRunPayload) -> dict:
+    from codesentry.control.prompts import run_prompt_eval as _run
+
+    try:
+        return await run_in_threadpool(
+            _run, payload.agent, payload.version, payload.dataset, payload.limit
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        raise HTTPException(503, f"评测失败：{str(e)[:200]}") from e
+
+
 class WebhookPayload(BaseModel):
     url: str
     secret: str = ""
