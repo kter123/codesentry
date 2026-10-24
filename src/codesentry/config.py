@@ -75,6 +75,12 @@ class Settings(BaseSettings):
 
     # engines (FR-3 探测)
     codeql_bin: str = "codeql"
+    codeql_search_path: str = ""
+    codeql_suite: str = ""
+    codeql_build_mode: Literal["none", "autobuild", "manual"] = "none"
+    codeql_build_command: str = ""
+    codeql_timeout_s: int = 1800
+    codeql_db_cache: bool = True
     joern_bin: str = "joern"
     semgrep_bin: str = "semgrep"
 

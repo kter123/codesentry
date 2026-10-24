@@ -74,7 +74,7 @@ def run_codeql(
     OSS: bool,
     out_dir: str,
     *,
-    timeout: int = 3600,
+    timeout: int | None = None,
     codeql_bin: str | None = None,
 ) -> EngineResult:
     # Gate 强制（调用方也应先过 LicenseGate；此处防御性再查）
@@ -83,43 +83,71 @@ def run_codeql(
             engine="codeql", status="unavailable",
             reason="license gate: closed-source target denies CodeQL",
         )
-    bin_name = codeql_bin or os.environ.get("CODESENTRY_CODEQL_BIN", "codeql")
+    from codesentry.control.engine_config import resolve_codeql_config
+
+    cfg = resolve_codeql_config(lang)
+    bin_name = (codeql_bin if codeql_bin and codeql_bin != "codeql" else "")
+    bin_name = bin_name or cfg.binary or "codeql"
     codeql_path = shutil.which(bin_name)
     if codeql_path is None:
-        return EngineResult(engine="codeql", status="unavailable", reason=f"binary not found: {bin_name}")
+        return EngineResult(engine="codeql", status="unavailable",
+                            reason=f"binary not found: {bin_name}")
     db_lang = CODEQL_LANG.get(lang)
     if db_lang is None:
         return EngineResult(engine="codeql", status="unavailable", reason=f"unsupported language for CodeQL: {lang}")
 
+    timeout_s = int(timeout or cfg.timeout_s)
     work = Path(os.environ.get("CODESENTRY_WORK_DIR", ".codesentry")) / "codeql-db"
     work.mkdir(parents=True, exist_ok=True)
-    db_path = work / (Path(repo).name + f"-{db_lang}")
+    fingerprint = _repo_fingerprint(repo)
+    db_path = work / f"{db_lang}-{fingerprint}"
     result_sarif = Path(out_dir) / f"codeql-{db_lang}.sarif"
 
-    def _q(name: str) -> str:
-        return os.environ.get(f"CODESENTRY_{name}", "") or ""
-
-    packs = _q("QUERY_PACK") or "codeql-suites/java-security-extended.qls"
-    build_cmd = _q("BUILD_COMMAND")
-
     def _run(cmd, step):
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=False)
         if r.returncode != 0:
             return EngineResult(engine="codeql", status="crashed",
                                 reason=f"{step} exit {r.returncode}: {r.stderr[-400:]}")
         return None
 
-    err = _run([codeql_path, "database", "create", str(db_path), f"--language={db_lang}",
-                "--source-root", repo, "--overwrite"], "db create")
-    if err:
-        return err
-    if build_cmd:  # D15 Java 可选构建
-        err = _run([build_cmd], "build")
+    if not (cfg.cache and db_path.exists()):
+        cmd = [codeql_path, "database", "create", str(db_path),
+               f"--language={db_lang}", "--source-root", repo,
+               f"--build-mode={cfg.build_mode}"]
+        if cfg.search_path:
+            cmd += ["--search-path", cfg.search_path]
+        if cfg.build_mode == "manual" and cfg.build_command:
+            cmd += ["--command", cfg.build_command]
+        if not cfg.cache:
+            cmd.append("--overwrite")
+        err = _run(cmd, "db create")
         if err:
             return err
-    err = _run([codeql_path, "database", "analyze", str(db_path),
-                "--format=sarif-latest", "--output", str(result_sarif), packs], "analyze")
+    analyze = [codeql_path, "database", "analyze", str(db_path),
+               "--format=sarif-latest", "--output", str(result_sarif)]
+    if cfg.search_path:
+        analyze += ["--search-path", cfg.search_path]
+    analyze.append(cfg.suite)
+    err = _run(analyze, "analyze")
     if err:
         return err
     findings = _parse_sarif(result_sarif)
     return EngineResult(engine="codeql", status="ok", findings=findings)
+
+
+def _repo_fingerprint(repo: str) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "target", "build", "dist")]
+        for name in sorted(files):
+            path = Path(root) / name
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            h.update(str(path.relative_to(repo)).encode())
+            h.update(str(int(stat.st_mtime_ns)).encode())
+            h.update(str(stat.st_size).encode())
+    return h.hexdigest()[:16]

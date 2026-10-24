@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, Query
@@ -635,6 +636,14 @@ def _health_sync() -> dict:
     except Exception:  # noqa: BLE001, S110
         pass
     engines = {name: (shutil.which(name) or "") for name in ("semgrep", "codeql", "joern")}
+    try:
+        from codesentry.control.engine_config import resolve_codeql_config
+
+        cfg = resolve_codeql_config("java")
+        if cfg.binary and Path(cfg.binary).is_file():
+            engines["codeql"] = cfg.binary
+    except Exception:  # noqa: BLE001, S110
+        pass
     return {
         "db": db,
         "profiles": {"count": len(list_profiles())},

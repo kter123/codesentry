@@ -27,6 +27,8 @@ ANALYSIS_TABLES = [
     "graph_endpoints",
     "graph_files",
     "graph_builds",
+    "audit_paths",
+    "audit_rounds",
     "code_chunks",
     "kb_chunks",
     "vuln_cases",
