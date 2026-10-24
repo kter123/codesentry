@@ -21,7 +21,7 @@ def test_agents_list():
     r = client.get("/api/agents")
     assert r.status_code == 200
     names = [a["name"] for a in r.json()["agents"]]
-    assert {"recon", "scan", "retrieval", "triage", "poc_gen", "report"} <= set(names)
+    assert {"recon", "scan", "audit", "triage", "deploy", "poc_gen", "report"} <= set(names)
 
 
 def test_agent_timeline():

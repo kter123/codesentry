@@ -54,14 +54,15 @@ def get_versions(agent: str) -> list[dict]:
         ensure_control_schema()
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT version, body, active, body_sha256, created_at FROM prompt_versions"
-                " WHERE agent=%s ORDER BY version DESC",
+                "SELECT version, body, active, body_sha256, created_at, note, updated_by"
+                " FROM prompt_versions WHERE agent=%s ORDER BY version DESC",
                 (agent,),
             )
             rows = cur.fetchall()
         return [
             {"version": int(r[0]), "body": r[1], "active": bool(r[2]),
-             "body_sha256": r[3] or "", "created": str(r[4]), "created_at": str(r[4])}
+             "body_sha256": r[3] or "", "created": str(r[4]), "created_at": str(r[4]),
+             "note": r[5] or "", "updated_by": r[6] or ""}
             for r in rows
         ]
     except Exception:  # noqa: BLE001
@@ -126,7 +127,8 @@ def get_active(agent: str) -> dict | None:
         return None
 
 
-def create_version(agent: str, body: str, *, activate: bool = True, actor: str = "system") -> int | None:
+def create_version(agent: str, body: str, *, activate: bool = True, actor: str = "system",
+                   note: str = "") -> int | None:
     try:
         from codesentry.control.audit import audit_write
         from codesentry.control.bootstrap import ensure_control_schema
@@ -140,9 +142,9 @@ def create_version(agent: str, body: str, *, activate: bool = True, actor: str =
             if activate:
                 cur.execute("UPDATE prompt_versions SET active=FALSE WHERE agent=%s AND active", (agent,))
             cur.execute(
-                "INSERT INTO prompt_versions (agent, version, body, body_sha256, active)"
-                " VALUES (%s,%s,%s,%s,%s)",
-                (agent, nv, body, sha, activate),
+                "INSERT INTO prompt_versions (agent, version, body, body_sha256, active, note, updated_by)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (agent, nv, body, sha, activate, note, actor),
             )
             conn.commit()
         audit_write(actor, "create", "prompt", f"{agent}:{nv}", None,
@@ -313,6 +315,20 @@ def record_eval(agent: str, version: int | None, dataset: str, metrics: dict) ->
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def preview(agent: str, body: str | None = None, variables: dict | None = None) -> dict:
+    """渲染预览：可编辑正文 + 固定尾；未知变量返回缺失列表。"""
+    from codesentry.agents.prompts import compose_prompt, prompt_vars
+
+    body = body if body is not None else ((get_active(agent) or {}).get("body") or "")
+    try:
+        rendered = compose_prompt(agent, body, variables or {})
+        return {"agent": agent, "ok": True, "rendered": rendered,
+                "variables": prompt_vars(agent), "missing": []}
+    except KeyError as exc:
+        return {"agent": agent, "ok": False, "rendered": "", "variables": prompt_vars(agent),
+                "missing": [str(exc).strip("'\"")]}
 
 
 def list_evals(agent: str | None = None, limit: int = 100) -> list[dict]:

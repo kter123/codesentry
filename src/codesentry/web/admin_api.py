@@ -38,6 +38,7 @@ async def list_agents() -> dict:
 class PromptPayload(BaseModel):
     name: str
     body: str
+    note: str = ""
 
 
 @app.get("/api/prompts")
@@ -61,7 +62,8 @@ async def prompt_versions(name: str) -> dict:
 async def create_prompt(payload: PromptPayload) -> dict:
     from codesentry.control.prompts import create_version
 
-    nv = create_version(payload.name, payload.body, activate=True, actor="api")
+    nv = create_version(payload.name, payload.body, activate=True, actor="api",
+                        note=payload.note)
     if nv is None:
         raise HTTPException(503, "prompt 写入失败（DB 不可用？）")
     return {"name": payload.name, "version": nv}
@@ -253,7 +255,7 @@ async def resume_scan(scan_id: int, payload: ResumePayload) -> dict:
             scan_id_holder={"scan_id": scan_id, "budget": None, "snapshot": snapshot},
             human_review_node=human_review_node,
         )
-        cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 30}
+        cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 200}
         final = g.invoke(Command(resume=payload.decisions), config=cfg)
         try:
             with get_conn() as conn, conn.cursor() as cur:

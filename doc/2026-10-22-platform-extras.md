@@ -44,3 +44,10 @@
 ## 7. 审计结论
 
 最小闭环可用，均与“多 Agent 分析可解释、可复用、可清理”目标一致。剩余：多租户/配额、通知渠道（邮件/Slack/飞书已排除）、编排 UI、A/B 对比图、Copilot、评论 UI、向量检索/重建。
+
+## 8. 后续补充（2026-10-22）
+
+- 编排 UI 已接服务端：保存/激活/载入 `/api/graph-templates`（此前已实现）。
+- 审查评论 UI：ScanDetail finding 抽屉可查看/添加评论（POST `/api/scans/{id}/comments`）。
+- 密钥清理：`scripts/scan_secrets.py` 扫描仓库密钥；`scripts/rotate_master_key.py` 轮换 LLM/Embedding 加密主密钥。
+- 仍未完成：A/B 对比图（已有评测表/指标展示）、Copilot、向量重排、六语言 GraphRAG、KB 重建/切块预览 UI。

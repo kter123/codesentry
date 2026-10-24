@@ -12,40 +12,58 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
     "recon": {
         "display_name": "Recon", "model_role": "fast", "enabled": True,
         "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
-        "timeout_s": 120, "max_iterations": 8,
+        "timeout_s": 180, "max_iterations": 10,
+        "budget_override": {"max_tokens": 60_000, "max_tool_calls": 80, "max_cost_usd": 1.0},
     },
     "scan": {
         "display_name": "Scan", "model_role": "fast", "enabled": True,
         "capabilities": {"engines": ["semgrep", "codeql", "joern"], "network": False,
                          "shell": True, "poc_exec": False},
-        "timeout_s": 600, "max_iterations": 8,
+        "timeout_s": 900, "max_iterations": 10,
+        "budget_override": {"max_tokens": 60_000, "max_tool_calls": 80, "max_cost_usd": 1.0},
     },
     "retrieval": {
         "display_name": "Retrieval", "model_role": "fast", "enabled": True,
         "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
-        "timeout_s": 120, "max_iterations": 8,
+        "timeout_s": 240, "max_iterations": 12,
+        "budget_override": {"max_tokens": 120_000, "max_tool_calls": 150, "max_cost_usd": 2.5},
+    },
+    "audit": {
+        "display_name": "Audit", "model_role": "deep", "enabled": True,
+        "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
+        "timeout_s": 900, "max_iterations": 16,
+        "budget_override": {"max_tokens": 400_000, "max_tool_calls": 400, "max_cost_usd": 10.0},
+    },
+    "deploy": {
+        "display_name": "Deploy", "model_role": "deep", "enabled": True,
+        "capabilities": {"engines": [], "network": True, "shell": False, "poc_exec": False},
+        "timeout_s": 900, "max_iterations": 10,
+        "budget_override": {"max_tokens": 150_000, "max_tool_calls": 120, "max_cost_usd": 2.0},
     },
     "triage": {
         "display_name": "Triage", "model_role": "deep", "enabled": True,
         "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
-        "timeout_s": 300, "max_iterations": 8,
+        "timeout_s": 900, "max_iterations": 18,
+        "budget_override": {"max_tokens": 500_000, "max_tool_calls": 600, "max_cost_usd": 12.0},
     },
     "poc_gen": {
         "display_name": "PoC Gen", "model_role": "deep", "enabled": True,
         "capabilities": {"engines": [], "network": True, "shell": True, "poc_exec": True},
-        "timeout_s": 300, "max_iterations": 8,
+        "timeout_s": 900, "max_iterations": 14,
+        "budget_override": {"max_tokens": 300_000, "max_tool_calls": 350, "max_cost_usd": 8.0},
     },
     "report": {
         "display_name": "Report", "model_role": "fast", "enabled": True,
         "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
-        "timeout_s": 120, "max_iterations": 8,
+        "timeout_s": 180, "max_iterations": 8,
+        "budget_override": {"max_tokens": 80_000, "max_tool_calls": 80, "max_cost_usd": 1.5},
     },
 }
 
 _EDITABLE = {
     "enabled", "model_role", "llm_profile_id", "display_name",
     "capabilities", "timeout_s", "max_iterations", "temperature_override",
-    "budget_override", "ab_json",
+    "budget_override", "ab_json", "tools_allow", "skills_allow", "wrapup_prompt",
 }
 
 
@@ -61,8 +79,11 @@ def _default(name: str) -> dict[str, Any]:
         "timeout_s": d["timeout_s"],
         "max_iterations": d["max_iterations"],
         "temperature_override": None,
-        "budget_override": {},
+        "budget_override": dict(d.get("budget_override") or {}),
         "ab_json": {},
+        "tools_allow": [],
+        "skills_allow": [],
+        "wrapup_prompt": "",
     }
 
 
@@ -103,7 +124,8 @@ def get_agent_config(name: str) -> dict[str, Any]:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT enabled, model_role, llm_profile_id, display_name, capabilities,"
-                " timeout_s, max_iterations, temperature_override, budget_override, ab_json"
+                " timeout_s, max_iterations, temperature_override, budget_override, ab_json,"
+                " tools_allow, skills_allow, wrapup_prompt"
                 " FROM agent_configs WHERE name=%s",
                 (name,),
             )
@@ -118,8 +140,11 @@ def get_agent_config(name: str) -> dict[str, Any]:
                 "timeout_s": int(row[5] or out["timeout_s"]),
                 "max_iterations": int(row[6] or out["max_iterations"]),
                 "temperature_override": row[7],
-                "budget_override": row[8] or {},
+                "budget_override": row[8] or out.get("budget_override") or {},
                 "ab_json": row[9] or {},
+                "tools_allow": row[10] or [],
+                "skills_allow": row[11] or [],
+                "wrapup_prompt": row[12] or "",
             })
     except Exception:  # noqa: BLE001, S110
         pass
@@ -153,7 +178,9 @@ def update_agent_config(name: str, patch: dict, actor: str = "system") -> dict[s
         vals: list[Any] = []
         for k, v in payload.items():
             sets.append(f"{k}=%s")
-            vals.append(json.dumps(v) if k in ("capabilities", "budget_override", "ab_json") else v)
+            vals.append(json.dumps(v) if k in (
+                "capabilities", "budget_override", "ab_json", "tools_allow", "skills_allow"
+            ) else v)
         sets.append("updated_at=now()")
         vals.append(name)
         with get_conn() as conn, conn.cursor() as cur:

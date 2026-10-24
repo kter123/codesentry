@@ -64,6 +64,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
+  Collection,
   Connection,
   Cpu,
   DataLine,
@@ -97,6 +98,7 @@ const menuItems = [
   { path: '/usage', label: '用量与配额', icon: DataLine },
   { path: '/prompts', label: 'Prompt 管理', icon: EditPen },
   { path: '/skills', label: 'Skills 管理', icon: MagicStick },
+  { path: '/kb', label: '知识库', icon: Collection },
   { path: '/rules', label: '规则管理', icon: SetUp },
   { path: '/orchestration', label: '编排模板', icon: Share },
   { path: '/audit', label: '配置审计', icon: Tickets },

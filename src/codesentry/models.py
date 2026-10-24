@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Severity = Literal["info", "low", "medium", "high", "critical"]
-EngineName = Literal["codeql", "joern", "semgrep"]
+EngineName = Literal["codeql", "joern", "semgrep", "agent"]
 
 
 class Finding(BaseModel):
@@ -17,6 +17,7 @@ class Finding(BaseModel):
     message: str
     engine: EngineName
     taint_metadata: dict = Field(default_factory=dict)
+    fix_advice: str = ""
 
 
 class LicenseDeclaration(BaseModel):

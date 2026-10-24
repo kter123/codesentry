@@ -9,10 +9,12 @@
 
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_DISABLED_UNTIL = 0.0
 
 
 class EmbeddingClient:
-    def __init__(self, base_url: str, model: str, api_key: str = "") -> None:
+    def __init__(self, base_url: str, model: str, api_key: str = "",
+                 timeout_s: float = 60.0) -> None:
         if not model or not base_url:
             raise RuntimeError(
                 "embedding channel 未配置：需 CODESENTRY_EMBEDDING_BASE_URL + CODESENTRY_EMBEDDING_MODEL"
@@ -23,7 +25,11 @@ class EmbeddingClient:
         self.api_key = api_key
         from openai import OpenAI
 
-        self._client = OpenAI(base_url=self.base_url, api_key=api_key or "not-needed")
+        # 检索是可选增强：不可达时必须快速降级到 FTS，不能拖住扫描节点
+        self._client = OpenAI(
+            base_url=self.base_url, api_key=api_key or "not-needed",
+            timeout=float(timeout_s or 60.0), max_retries=0,
+        )
 
     @classmethod
     def from_config(cls) -> "EmbeddingClient":
@@ -34,6 +40,7 @@ class EmbeddingClient:
             base_url=s.embedding_base_url or s.model_base_url,
             model=s.embedding_model,
             api_key=s.embedding_api_key or "",
+            timeout_s=float(getattr(s, "embedding_timeout_s", 60.0) or 60.0),
         )
 
     @property
@@ -54,3 +61,25 @@ class EmbeddingClient:
     def dims(self) -> int:
         v = self.embed([""])[0]
         return len(v)
+
+
+def embed_texts(texts: list[str]) -> list[list[float] | None]:
+    """批量取查询向量；未配置/失败时返回等长 None（调用方降级 FTS）。"""
+    global _DISABLED_UNTIL
+    if not texts:
+        return []
+    import time
+
+    if time.monotonic() < _DISABLED_UNTIL:
+        return [None] * len(texts)
+    try:
+        client = EmbeddingClient.from_config()
+        vectors: list[list[float] | None] = []
+        for i in range(0, len(texts), 64):
+            vectors.extend(client.embed(texts[i : i + 64]))
+        if len(vectors) != len(texts):
+            return [None] * len(texts)
+        return vectors
+    except Exception:  # noqa: BLE001 - 检索降级为全文
+        _DISABLED_UNTIL = time.monotonic() + 60
+        return [None] * len(texts)

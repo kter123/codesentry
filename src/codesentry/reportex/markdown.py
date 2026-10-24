@@ -42,6 +42,6 @@ def render_markdown(
         lines.append(f"- CWE：CWE-{f.cwe}")
         lines.append(f"- 引擎：{_ENGINE_CN.get(f.engine, f.engine)}；置信度：{f.confidence:.2f}")
         lines.append(f"- 消息：{f.message}")
-        lines.append("- 修复建议：（M3 由 TriageAgent 补全）")
+        lines.append(f"- 修复建议：{f.fix_advice or '（未提供，请结合 Triage 结论复核）'}")
         lines.append("")
     return "\n".join(lines)

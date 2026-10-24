@@ -12,7 +12,7 @@ def run_report(state: dict, out_dir: str) -> dict:
     triaged = state.get("triaged_findings") or []
     findings = []
     for t in triaged:
-        t_f = {k: v for k, v in t.items() if k in {"rule_id", "cwe", "severity", "confidence", "file", "line", "end_line", "message", "engine", "taint_metadata"}}
+        t_f = {k: v for k, v in t.items() if k in {"rule_id", "cwe", "severity", "confidence", "file", "line", "end_line", "message", "engine", "taint_metadata", "fix_advice"}}
         try:
             findings.append(Finding(**t_f))
         except Exception:  # noqa: BLE001, S112 - 单条坏数据不影响整报

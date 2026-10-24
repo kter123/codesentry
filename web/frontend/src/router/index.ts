@@ -50,6 +50,12 @@ const router = createRouter({
           meta: { title: '扫描详情', activeMenu: '/scans' },
         },
         {
+          path: 'scans/:id/graph',
+          name: 'scan-graph',
+          component: () => import('@/views/GraphView.vue'),
+          meta: { title: '代码图', activeMenu: '/scans' },
+        },
+        {
           path: 'reviews',
           name: 'reviews',
           component: () => import('@/views/ReviewsView.vue'),
@@ -90,6 +96,12 @@ const router = createRouter({
           name: 'skills',
           component: () => import('@/views/SkillsView.vue'),
           meta: { title: 'Skills 管理' },
+        },
+        {
+          path: 'kb',
+          name: 'knowledge',
+          component: () => import('@/views/KnowledgeView.vue'),
+          meta: { title: '知识库' },
         },
         {
           path: 'rules',

@@ -93,6 +93,25 @@
             <el-descriptions-item label="ECE">{{ Number(evalResult.ece ?? 0).toFixed(3) }}</el-descriptions-item>
             <el-descriptions-item label="样本">{{ evalResult.n ?? 0 }}</el-descriptions-item>
           </el-descriptions>
+          <eval-compare-chart v-if="evalHistory.length" :rows="evalHistory" />
+          <el-table v-if="evalHistory.length" :data="evalHistory" size="small" style="margin-top: 10px">
+            <el-table-column label="版本" width="70">
+              <template #default="{ row }">v{{ row.version ?? 'active' }}</template>
+            </el-table-column>
+            <el-table-column prop="dataset" label="数据集" min-width="90" />
+            <el-table-column label="Recall" width="80">
+              <template #default="{ row }">{{ pct(row.recall) }}</template>
+            </el-table-column>
+            <el-table-column label="Precision" width="90">
+              <template #default="{ row }">{{ pct(row.precision) }}</template>
+            </el-table-column>
+            <el-table-column label="FP" width="70">
+              <template #default="{ row }">{{ pct(row.fp_rate) }}</template>
+            </el-table-column>
+            <el-table-column label="ECE" width="70">
+              <template #default="{ row }">{{ Number(row.ece ?? 0).toFixed(3) }}</template>
+            </el-table-column>
+          </el-table>
         </div>
       </el-col>
 
@@ -110,6 +129,7 @@
             <el-button size="small" :loading="linting" :disabled="!editorBody.trim()" @click="lint">
               Lint
             </el-button>
+            <el-button size="small" @click="openPreview">变量 / 预览</el-button>
             <el-button size="small" @click="openCreate(selectedName, editorBody)">另存为新版本</el-button>
           </div>
 
@@ -173,6 +193,9 @@
         <el-form-item label="正文">
           <el-input v-model="createBody" class="code-input" type="textarea" :rows="16" />
         </el-form-item>
+        <el-form-item label="变更说明（可选）">
+          <el-input v-model="createNote" placeholder="例如：收紧证据规约" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
@@ -199,6 +222,35 @@
       >{{ line.text + '\n' }}</span></pre>
       <el-empty v-else :image-size="60" description="选择两个版本后生成 unified diff" />
     </el-dialog>
+    <el-dialog v-model="previewVisible" title="变量与渲染预览" width="860px" destroy-on-close>
+      <el-alert
+        v-if="previewMissing.length"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="`未定义变量：${previewMissing.join(', ')}`"
+        style="margin-bottom: 10px"
+      />
+      <el-row :gutter="14">
+        <el-col :xs="24" :sm="8">
+          <h4>可用变量</h4>
+          <el-table :data="promptVars" size="small" max-height="360">
+            <el-table-column prop="name" label="变量" width="100">
+              <template #default="{ row }"><span class="mono">{{ varToken(row.name) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="description" label="说明" min-width="140" show-overflow-tooltip />
+          </el-table>
+        </el-col>
+        <el-col :xs="24" :sm="16">
+          <h4>渲染结果（正文 + 固定尾）</h4>
+          <pre class="pre-block" style="max-height: 420px">{{ previewText || '点击“渲染预览”查看' }}</pre>
+        </el-col>
+      </el-row>
+      <template #footer>
+        <el-button @click="previewVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="previewing" @click="runPreview">渲染预览</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -211,6 +263,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { api, errorMessage } from '@/api/client'
 import type { PromptSummary, PromptVersion } from '@/api/types'
 import ErrorAlert from '@/components/ErrorAlert.vue'
+import EvalCompareChart from '@/components/EvalCompareChart.vue'
 import PageHeader from '@/components/PageHeader.vue'
 
 interface LintResult {
@@ -233,10 +286,17 @@ const linting = ref(false)
 const lintResult = ref<LintResult | null>(null)
 const evaluating = ref(false)
 const evalResult = ref<Record<string, number> | null>(null)
+const evalHistory = ref<Array<Record<string, number | string | undefined>>>([])
+const previewVisible = ref(false)
+const previewing = ref(false)
+const previewText = ref('')
+const previewMissing = ref<string[]>([])
+const promptVars = ref<Array<Record<string, string>>>([])
 
 const createVisible = ref(false)
 const createName = ref('')
 const createBody = ref('')
+const createNote = ref('')
 const createError = ref('')
 const creating = ref(false)
 
@@ -304,6 +364,7 @@ async function selectPrompt(row: PromptSummary | { name: string }): Promise<void
       `/api/prompts/${encodeURIComponent(name)}/versions`,
     )
     versions.value = res?.versions ?? []
+    void loadEvals(name)
   } catch (e) {
     versions.value = []
     const status = (e as { status?: number }).status
@@ -342,6 +403,7 @@ async function createVersion(): Promise<void> {
     const res = await api.post<{ name: string; version: number }>('/api/prompts', {
       name: createName.value.trim(),
       body: createBody.value,
+      note: createNote.value.trim(),
     })
     ElMessage.success(`已创建 ${res.name} v${res.version} 并激活`)
     createVisible.value = false
@@ -357,6 +419,7 @@ async function createVersion(): Promise<void> {
 function openCreate(name = '', body = ''): void {
   createName.value = name || selectedName.value || ''
   createBody.value = body || editorBody.value || ''
+  createNote.value = ''
   createError.value = ''
   createVisible.value = true
 }
@@ -419,6 +482,18 @@ function pct(value?: number): string {
   return `${((value ?? 0) * 100).toFixed(1)}%`
 }
 
+async function loadEvals(name: string): Promise<void> {
+  try {
+    const res = await api.get<{ evals?: Array<Record<string, number | string | undefined>> }>(
+      '/api/prompt-evals',
+      { agent: name },
+    )
+    evalHistory.value = res.evals || []
+  } catch {
+    evalHistory.value = []
+  }
+}
+
 async function runEval(): Promise<void> {
   if (!selectedName.value || !selectedVersion.value) return
   evaluating.value = true
@@ -432,6 +507,7 @@ async function runEval(): Promise<void> {
     })
     evalResult.value = res.metrics ?? null
     ElMessage.success('评测完成（结果已写入 prompt_evals）')
+    void loadEvals(selectedName.value)
   } catch (e) {
     error.value = `评测失败：${errorMessage(e)}`
   } finally {
@@ -486,6 +562,48 @@ watch(
     }
   },
 )
+
+function varToken(name: string): string {
+  return `{{${name}}}`
+}
+
+async function openPreview(): Promise<void> {
+  previewVisible.value = true
+  previewMissing.value = []
+  previewText.value = ''
+  if (!selectedName.value) return
+  try {
+    const res = await api.get<{ variables?: Array<Record<string, string>> }>(
+      `/api/prompts/${encodeURIComponent(selectedName.value)}/vars`,
+    )
+    promptVars.value = res.variables || []
+  } catch {
+    promptVars.value = []
+  }
+  await runPreview()
+}
+
+async function runPreview(): Promise<void> {
+  if (!selectedName.value) return
+  previewing.value = true
+  previewMissing.value = []
+  try {
+    const res = await api.post<{
+      ok: boolean
+      rendered?: string
+      missing?: string[]
+    }>(`/api/prompts/${encodeURIComponent(selectedName.value)}/preview`, {
+      body: editorBody.value,
+      variables: { agent: selectedName.value },
+    })
+    previewText.value = res.rendered || ''
+    previewMissing.value = res.missing || []
+  } catch (e) {
+    previewText.value = `预览失败：${errorMessage(e)}`
+  } finally {
+    previewing.value = false
+  }
+}
 
 onMounted(load)
 </script>

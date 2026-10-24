@@ -18,16 +18,20 @@ from codesentry.orchestrator.telemetry import node_run
 
 
 def _wrap(node_name: str, fn, scan_id_holder: dict):
+    cfg_name = "audit" if node_name == "audit_path" else node_name
+
     def inner(state: AuditState) -> dict:
         sid = scan_id_holder.get("scan_id") or 0
         bc = scan_id_holder.get("budget")
-        if node_name in {"recon", "scan", "retrieval", "report"}:
+        if cfg_name in {"recon", "scan", "audit", "deploy", "report"}:
             try:
                 from codesentry.control.agent_config import get_agent_config
 
-                if not get_agent_config(node_name).get("enabled", True):
+                if not get_agent_config(cfg_name).get("enabled", True):
                     with node_run(sid, node_name, status_override="skipped"):
                         pass
+                    if node_name == "audit_path":
+                        return {}
                     skip: dict = {
                         "messages": [*(state.get("messages") or []), f"{node_name}: agent disabled"]
                     }
@@ -50,7 +54,7 @@ def _wrap(node_name: str, fn, scan_id_holder: dict):
                 from codesentry.agents.runtime import prepare_agent
 
                 runtime = prepare_agent(
-                    node_name, scan_id=sid, snapshot=scan_id_holder.get("snapshot")
+                    cfg_name, scan_id=sid, snapshot=scan_id_holder.get("snapshot")
                 )
             except Exception:  # noqa: BLE001 - runtime 解析失败时节点降级
                 runtime = None
@@ -68,10 +72,10 @@ def _wrap(node_name: str, fn, scan_id_holder: dict):
             try:
                 from codesentry.control.agent_config import get_agent_config
 
-                override = get_agent_config(node_name).get("budget_override") or {}
+                override = get_agent_config(cfg_name).get("budget_override") or {}
             except Exception:  # noqa: BLE001
                 override = {}
-        if bc is not None and override and bc.over_agent(node_name, override):
+        if bc is not None and override and bc.over_agent(cfg_name, override):
             with node_run(sid, node_name, status_override="skipped"):
                 pass
             return {
@@ -107,8 +111,8 @@ def _wrap(node_name: str, fn, scan_id_holder: dict):
                     scan_id_holder["last_sha"] = digest
             except Exception:  # noqa: BLE001, S110 - 审查链失败不阻塞扫描
                 pass
-        if bc is not None:
-            # budget 复本入 state（NFR 遥测）
+        if bc is not None and node_name != "audit_path":
+            # Send 并行分支不能同时写非 reducer 的 budget；汇总节点再写
             update = {**update, "budget": bc.to_state()}
         return update
 
@@ -136,14 +140,17 @@ def _get_last_cost() -> float:
 
 
 def route_after_triage(state: AuditState) -> str:
-    """Supervisor 条件边 1：预算熔断 → report；证据不足 → 补查；正常 → poc_gen。"""
+    """预算熔断 → report；证据不足 → audit 补查；正常 → deploy/poc。"""
     if (state.get("budget") or {}).get("phase") == "breach":
         return "report"
     messages = state.get("messages") or []
-    insufficient = any("insufficient_evidence" in str(m) for m in messages[-3:])
-    state["replan_count"] = (state.get("replan_count") or 0) + (1 if insufficient else 0)
-    if insufficient and (state.get("replan_count") or 0) <= MAX_REPLANS:
-        return "retrieval"  # 补查一次
+    insufficient = bool(state.get("audit_feedback")) or any(
+        "insufficient_evidence" in str(m) for m in messages[-3:]
+    )
+    replans = int(state.get("replan_count") or 0)
+    if insufficient and replans < MAX_REPLANS:
+        state["replan_count"] = replans + 1
+        return "audit"
     return "poc_gen"
 
 
@@ -165,53 +172,91 @@ def build_graph(
     poc_agent=None,
     report_agent_fn=None,
     recon_agent=None,
+    graph_build_agent=None,
+    audit_agent=None,
     deploy_agent=None,
     checkpointer: BaseCheckpointSaver | None = None,
     scan_id_holder: dict | None = None,
     human_review_node: Any | None = None,
 ) -> Any:
     holder = scan_id_holder or {"scan_id": 0, "budget": None}
-    if any(x is None for x in (scan_agent, retrieval_agent, triage_agent, poc_agent, report_agent_fn, recon_agent)):
+    if any(x is None for x in (scan_agent, triage_agent, poc_agent, report_agent_fn, recon_agent)):
         from codesentry.orchestrator.registry import default_nodes
 
         defaults = default_nodes()
         scan_agent = scan_agent or defaults["scan"]
-        retrieval_agent = retrieval_agent or defaults["retrieval"]
         triage_agent = triage_agent or defaults["triage"]
         poc_agent = poc_agent or defaults["poc_gen"]
         report_agent_fn = report_agent_fn or defaults["report"]
         recon_agent = recon_agent or defaults["recon"]
+    from codesentry.orchestrator.registry import default_nodes
+
+    defaults = default_nodes()
+    graph_build_agent = graph_build_agent or defaults["graph_build"]
+    audit_agent = audit_agent or defaults["audit"]
+    if deploy_agent is None:
+        deploy_agent = defaults["deploy"]
 
     g = StateGraph(AuditState)
 
+    from codesentry.agents.path_audit_nodes import (
+        route_after_collect,
+        route_audit,
+        run_audit_collect,
+        run_audit_finalize,
+        run_audit_path,
+        run_audit_plan,
+        run_path_build,
+    )
+
     g.add_node("recon", _wrap("recon", recon_agent, holder))
+    g.add_node("graph_build", _wrap("graph_build", graph_build_agent, holder))
     g.add_node("scan", _wrap("scan", scan_agent, holder))
-    g.add_node("retrieval", _wrap("retrieval", retrieval_agent, holder))
+    g.add_node("path_build", _wrap("path_build", run_path_build, holder))
+    g.add_node("audit_plan", _wrap("audit_plan", run_audit_plan, holder))
+    g.add_node("audit_path", _wrap("audit_path", run_audit_path, holder))
+    g.add_node("audit_collect", _wrap("audit_collect", run_audit_collect, holder))
+    g.add_node("audit_finalize", _wrap("audit", audit_agent or run_audit_finalize, holder))
     g.add_node("triage", _wrap("triage", triage_agent, holder))
-    if deploy_agent is not None:
-        g.add_node("deploy", _wrap("deploy", deploy_agent, holder))
+    g.add_node("deploy", _wrap("deploy", deploy_agent, holder))
     g.add_node("poc_gen", _wrap("poc_gen", poc_agent, holder))
     g.add_node("report", _wrap("report", report_agent_fn, holder))
     if human_review_node is not None:
         g.add_node("human_review", human_review_node)
 
     g.add_edge(START, "recon")
-    g.add_edge("recon", "scan")
-    g.add_edge("scan", "retrieval")
-    g.add_edge("retrieval", "triage")
-    if deploy_agent is not None:
-        def _route_triage_with_deploy(state: AuditState) -> str:
-            nxt = route_after_triage(state)
-            return "deploy" if nxt == "poc_gen" else nxt
+    g.add_edge("recon", "graph_build")
+    g.add_edge("graph_build", "scan")
+    g.add_edge("scan", "path_build")
+    g.add_edge("path_build", "audit_plan")
+    def _route_audit(state: AuditState):
+        if not (state.get("audit_paths") or []) and audit_agent is not None:
+            return "audit_finalize"
+        return route_audit(dict(state))
 
-        g.add_conditional_edges(
-            "triage", _route_triage_with_deploy,
-            {"retrieval": "retrieval", "deploy": "deploy", "report": "report"},
-        )
-        g.add_edge("deploy", "poc_gen")
-    else:
-        g.add_conditional_edges("triage", route_after_triage,
-                                {"retrieval": "retrieval", "poc_gen": "poc_gen", "report": "report"})
+    g.add_conditional_edges(
+        "audit_plan", _route_audit,
+        {"audit_path": "audit_path", "triage": "triage", "audit_finalize": "audit_finalize"},
+    )
+    g.add_edge("audit_path", "audit_collect")
+    g.add_conditional_edges(
+        "audit_collect", route_after_collect,
+        {"audit_plan": "audit_plan", "triage": "triage", "audit_finalize": "audit_finalize"},
+    )
+    g.add_edge("audit_finalize", "triage")
+
+    def _route_triage(state: AuditState) -> str:
+        nxt = route_after_triage(state)
+        if nxt == "audit":
+            # 路径审计已多轮；Triage 后不再回环，避免无 pending 时空转
+            nxt = "poc_gen"
+        return "deploy" if nxt == "poc_gen" else nxt
+
+    g.add_conditional_edges(
+        "triage", _route_triage,
+        {"audit_plan": "audit_plan", "deploy": "deploy", "report": "report"},
+    )
+    g.add_edge("deploy", "poc_gen")
     g.add_conditional_edges("poc_gen", route_after_poc, {"human_review": "human_review", "report": "report"} if human_review_node is not None else {"report": "report"})
     if human_review_node is not None:
         g.add_edge("human_review", "report")

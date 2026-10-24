@@ -18,19 +18,19 @@ def _env(monkeypatch):
 
 def test_phase_thresholds():
     g = BudgetGuard(scan_id=0)  # 不连库路径；record 迭代不落库时吞异常
-    g.record(tokens=400_000)  # 80%
+    g.record(tokens=960_000)  # 80%
     assert g.phase_now() is BudgetPhase.WARN
-    g.record(tokens=200_000)  # >100%
+    g.record(tokens=240_000)  # >100%
     assert g.phase_now() is BudgetPhase.BREACH
     assert g.breached()
 
 
 def test_tool_call_and_cost():
     g = BudgetGuard(scan_id=1)
-    g.record(tool_calls=450)  # 90%
+    g.record(tool_calls=1_350)  # 90%
     assert g.phase_now() is BudgetPhase.WARN
     g2 = BudgetGuard(scan_id=1)
-    g2.record(cost_usd=10.0)
+    g2.record(cost_usd=30.0)
     assert g2.phase_now() is BudgetPhase.BREACH
 
 

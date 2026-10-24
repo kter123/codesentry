@@ -78,6 +78,53 @@
       </el-table>
     </div>
 
+    <div class="panel">
+      <h2 class="panel-title">池与健康 <span class="panel-subtitle">激活配置链首 → priority 降序</span></h2>
+      <el-table :data="health" size="small">
+        <el-table-column prop="name" label="Profile" min-width="140" />
+        <el-table-column prop="priority" label="优先级" width="80" />
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.open ? 'danger' : 'success'">
+              {{ row.open ? '冷却中' : '可用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="fails" label="连续失败" width="90" />
+        <el-table-column prop="trips" label="熔断次数" width="90" />
+        <el-table-column prop="last_error" label="最近错误" min-width="240" show-overflow-tooltip />
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button link type="primary" :disabled="!row.open" @click="recover(row.profile_id)">
+              恢复
+            </el-button>
+          </template>
+        </el-table-column>
+        <template #empty><el-empty :image-size="50" description="暂无健康数据" /></template>
+      </el-table>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">最近调用 <span class="panel-subtitle">原始请求/响应已脱敏截断</span></h2>
+      <el-table :data="calls" size="small" max-height="320">
+        <el-table-column prop="id" label="#" width="60" />
+        <el-table-column prop="agent" label="Agent" width="100" />
+        <el-table-column prop="model" label="模型" min-width="150" show-overflow-tooltip />
+        <el-table-column label="token" width="110">
+          <template #default="{ row }">{{ row.prompt_tokens }} / {{ row.completion_tokens }}</template>
+        </el-table-column>
+        <el-table-column prop="latency_ms" label="耗时 ms" width="90" />
+        <el-table-column label="结果" width="80">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.ok ? 'success' : 'danger'">{{ row.ok ? 'OK' : 'ERR' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="error" label="错误" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="created_at" label="时间" min-width="160" show-overflow-tooltip />
+        <template #empty><el-empty :image-size="50" description="暂无调用记录" /></template>
+      </el-table>
+    </div>
+
     <el-dialog
       v-model="dialogVisible"
       :title="editingId ? `编辑 Profile #${editingId}` : '新建 LLM Profile'"
@@ -203,6 +250,21 @@
               <el-switch v-model="form.is_default" />
             </el-form-item>
           </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-form-item label="池优先级">
+              <el-input-number v-model="form.priority" :min="0" :max="1000" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-form-item label="上下文窗口 (K)">
+              <el-input-number v-model="form.context_window_k" :min="0" :max="2000" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-form-item label="不参与故障转移">
+              <el-switch v-model="form.pool_exclude" />
+            </el-form-item>
+          </el-col>
         </el-row>
 
         <el-collapse>
@@ -262,6 +324,8 @@ const loading = ref(false)
 const error = ref('')
 const profiles = ref<LlmProfile[]>([])
 const presets = ref<Record<string, Preset>>({})
+const health = ref<Array<Record<string, unknown>>>([])
+const calls = ref<Array<Record<string, unknown>>>([])
 
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
@@ -287,6 +351,9 @@ const form = reactive({
   billing_mode: 'metered',
   enabled: true,
   is_default: false,
+  priority: 0,
+  pool_exclude: false,
+  context_window_k: 0,
 })
 
 const advanced = reactive({
@@ -311,7 +378,37 @@ async function load(): Promise<void> {
   if (profilesRes.status === 'fulfilled') profiles.value = profilesRes.value?.profiles ?? []
   else error.value = `加载 LLM Profiles 失败：${errorMessage(profilesRes.reason)}`
   if (presetsRes.status === 'fulfilled') presets.value = presetsRes.value?.presets ?? {}
+  void loadHealth()
+  void loadCalls()
   loading.value = false
+}
+
+async function loadHealth(): Promise<void> {
+  try {
+    const res = await api.get<{ profiles?: Array<Record<string, unknown>> }>('/api/llm-profiles/health')
+    health.value = res.profiles || []
+  } catch {
+    health.value = []
+  }
+}
+
+async function loadCalls(): Promise<void> {
+  try {
+    const res = await api.get<{ calls?: Array<Record<string, unknown>> }>('/api/llm-calls', { limit: 20 })
+    calls.value = res.calls || []
+  } catch {
+    calls.value = []
+  }
+}
+
+async function recover(profileId: number): Promise<void> {
+  try {
+    await api.post(`/api/llm-profiles/${profileId}/recover`, {})
+    ElMessage.success('已恢复该 Profile')
+    void loadHealth()
+  } catch (e) {
+    ElMessage.error(errorMessage(e))
+  }
 }
 
 function resetForm(): void {
@@ -333,6 +430,9 @@ function resetForm(): void {
     billing_mode: 'metered',
     enabled: true,
     is_default: false,
+    priority: 0,
+    pool_exclude: false,
+    context_window_k: 0,
   })
   Object.assign(advanced, {
     capabilities: '{}',
@@ -372,6 +472,9 @@ function openEdit(profile: LlmProfile): void {
     billing_mode: profile.billing_mode ?? 'metered',
     enabled: profile.enabled !== false,
     is_default: profile.is_default === true,
+    priority: Number(profile.priority ?? 0),
+    pool_exclude: profile.pool_exclude === true,
+    context_window_k: Number(profile.context_window_k ?? 0),
   })
   advanced.capabilities = JSON.stringify(profile.capabilities ?? {}, null, 2)
   advanced.extra_headers = JSON.stringify(profile.extra_headers ?? {}, null, 2)
@@ -430,6 +533,9 @@ async function save(): Promise<void> {
       billing_mode: form.billing_mode,
       enabled: form.enabled,
       is_default: form.is_default,
+      priority: form.priority,
+      pool_exclude: form.pool_exclude,
+      context_window_k: form.context_window_k,
       capabilities: parseJson(advanced.capabilities, 'capabilities'),
       extra_headers: parseJson(advanced.extra_headers, 'extra_headers'),
       model_catalog: parseJson(advanced.model_catalog, 'model_catalog'),

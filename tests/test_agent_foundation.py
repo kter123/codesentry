@@ -10,7 +10,6 @@ from codesentry.agents import scan as scan_mod
 from codesentry.agents.llm import LLMClient, LLMError
 from codesentry.agents.poc_gen import run_poc_gen
 from codesentry.agents.report import run_report
-from codesentry.agents.retrieval import run_retrieval
 from codesentry.agents.state import new_state
 from codesentry.agents.triage import run_triage
 from codesentry.control import agent_config, profiles, prompts, skills
@@ -134,7 +133,8 @@ def test_binding_resolution_order():
             profiles.set_default(prev_default.id, actor="test")
 
 
-def test_runtime_injects_prompt_skills_and_bound_profile():
+def test_runtime_injects_prompt_skills_and_bound_profile(monkeypatch):
+    monkeypatch.setenv("CODESENTRY_LLM_ENABLED", "true")
     before = agent_config.get_agent_config("triage")
     prev_prompts = prompts.get_versions("triage")
     prev_active = next((v["version"] for v in prev_prompts if v["active"]), None)
@@ -176,7 +176,8 @@ def test_runtime_injects_prompt_skills_and_bound_profile():
         _cleanup_profile(p.id)
 
 
-def test_snapshot_pins_old_versions_after_live_change():
+def test_snapshot_pins_old_versions_after_live_change(monkeypatch):
+    monkeypatch.setenv("CODESENTRY_LLM_ENABLED", "true")
     before = agent_config.get_agent_config("triage")
     prev_prompts = prompts.get_versions("triage")
     prev_active = next((v["version"] for v in prev_prompts if v["active"]), None)
@@ -247,6 +248,7 @@ def test_scan_shell_capability_blocks(monkeypatch):
 
 
 def test_llm_usage_attributed_to_agent_and_profile(monkeypatch):
+    monkeypatch.setenv("CODESENTRY_LLM_ENABLED", "true")
     before = agent_config.get_agent_config("triage")
     p = _profile()
     try:
@@ -268,6 +270,7 @@ def test_llm_usage_attributed_to_agent_and_profile(monkeypatch):
             raise LLMError("HTTP 401: unauthorized")
 
         agent_rt.llm._call_openai = boom  # type: ignore[method-assign]
+        agent_rt.llm._pool = []
         with pytest.raises(LLMError):
             agent_rt.llm.complete("sys", "user")
         with get_conn() as c, c.cursor() as cur:
@@ -285,6 +288,7 @@ def test_llm_usage_attributed_to_agent_and_profile(monkeypatch):
 
 
 def test_graph_end_to_end_with_stub_engine_and_real_triage_poc(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODESENTRY_LLM_ENABLED", "true")
     monkeypatch.setenv("CODESENTRY_POC_RUN", "off")
     monkeypatch.setenv("CODESENTRY_WORK_DIR", str(tmp_path))
     before = agent_config.get_agent_config("triage")
@@ -320,7 +324,7 @@ def test_graph_end_to_end_with_stub_engine_and_real_triage_poc(monkeypatch, tmp_
             scan_id_holder={"scan_id": sid, "budget": None, "snapshot": None},
         )
         final = g.invoke(new_state("/tmp/af-repo", OSS=False, scan_id=sid),
-                         config={"recursion_limit": 10})
+                         config={"recursion_limit": 20})
         assert final["phase"] == "done"
         kept = final["triaged_findings"]
         assert len(kept) == 1
@@ -352,7 +356,7 @@ def test_graph_end_to_end_with_stub_engine_and_real_triage_poc(monkeypatch, tmp_
 
 
 def test_full_chain_real_retrieval_triage_poc_report(monkeypatch, tmp_path):
-    """多层协同：retrieval → triage → poc_gen → report 用真实节点，引擎用 stub。"""
+    """多层协同：audit → triage → poc_gen → report 用真实节点，引擎/部署用 stub。"""
     monkeypatch.setenv("CODESENTRY_POC_RUN", "off")
     monkeypatch.setenv("CODESENTRY_WORK_DIR", str(tmp_path))
     before = agent_config.get_agent_config("triage")
@@ -379,18 +383,19 @@ def test_full_chain_real_retrieval_triage_poc_report(monkeypatch, tmp_path):
         }
         g = build_graph(
             recon_agent=lambda s: {"profile": {"languages": ["python"]}},
-            scan_agent=lambda s: {"engine_findings": [finding], "phase": "retrieval"},
-            retrieval_agent=run_retrieval,
+            scan_agent=lambda s: {"engine_hints": [finding], "phase": "audit"},
+            audit_agent=lambda s: {"candidate_findings": [finding], "phase": "triage"},
             triage_agent=run_triage,
             poc_agent=run_poc_gen,
+            deploy_agent=lambda s: {"deploy_status": "disabled", "phase": "poc_gen"},
             report_agent_fn=lambda s: run_report(s, str(out_dir)),
             checkpointer=None,
             scan_id_holder={"scan_id": sid, "budget": None, "snapshot": None},
         )
         final = g.invoke(new_state("/tmp/af-full", OSS=False, scan_id=sid),
-                         config={"recursion_limit": 10})
+                         config={"recursion_limit": 20})
         assert final["phase"] == "done"
-        assert "af.full@5" in (final.get("evidence") or {})
+        assert "af.full@5" in {f"{f.get('rule_id')}@{f.get('line')}" for f in final["candidate_findings"]}
         assert final["triaged_findings"][0]["triage"]["verdict"] == "keep"
         assert final["poc_results"]["af.full@5"]["verdict"] == "plausible"
         assert (out_dir / "report.md").exists()

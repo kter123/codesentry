@@ -25,7 +25,7 @@ def test_state_fields_complete():
     s = new_state("/r", OSS=True)
     for field in ("evidence", "poc_results", "prompt_versions", "skills_snapshot", "messages", "engine_findings", "triaged_findings"):
         assert field in s
-    assert set(AGENT_NAMES) == {"recon", "scan", "retrieval", "triage", "poc_gen", "report"}
+    assert set(AGENT_NAMES) == {"recon", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
 
 
 def test_llm_requires_config(monkeypatch):

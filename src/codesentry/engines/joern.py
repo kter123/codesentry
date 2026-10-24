@@ -39,7 +39,8 @@ val cpg2 = loadCpg("%(cpg)s").get
 val names = List(%(names)s)
 val out = names.flatMap { n => cpg2.call.name(n).l }
 out.foreach { c =>
-  println("JOERN_ALERT|" + c.method.filename.headOption.getOrElse("") + "|" + c.location.lineNumber.headOption.getOrElse(-1) + "|" + c.name)
+  val f = c.file.name.headOption.getOrElse(c.method.filename.headOption.getOrElse(""))
+  println("JOERN_ALERT|" + f + "|" + c.location.lineNumber.headOption.getOrElse(-1) + "|" + c.name)
 }
 println("TOTAL " + out.size)
 cpg2.close
@@ -109,6 +110,13 @@ def _which_frontend(fe_cmd: str) -> str | None:
     return shutil.which(fe_cmd)
 
 
+def cpg_path(repo: str) -> Path:
+    work_root = os.environ.get("CODESENTRY_WORK_DIR", ".codesentry")
+    work = (Path(work_root) if Path(work_root).is_absolute() else Path.cwd() / work_root) / "cpg"
+    work.mkdir(parents=True, exist_ok=True)
+    return work / f"{Path(repo).name}.bin"
+
+
 def run_joern(
     repo: str,
     lang: str,
@@ -131,10 +139,7 @@ def run_joern(
     if fe_path is None:
         return EngineResult(engine="joern", status="unavailable", reason=f"frontend not found: {fe_cmd}")
 
-    work_root = os.environ.get("CODESENTRY_WORK_DIR", ".codesentry")
-    work = (Path(work_root) if Path(work_root).is_absolute() else Path.cwd() / work_root) / "cpg"
-    work.mkdir(parents=True, exist_ok=True)
-    cpg_out = work / f"{Path(repo).name}.bin"
+    cpg_out = cpg_path(repo)
 
     env = {**os.environ, "PATH": f"{Path(joern_path).parent}:{_JOERN_ROOT}:{os.environ.get('PATH', '')}"}
     abs_repo = str(Path(repo).resolve())
@@ -165,6 +170,11 @@ def run_joern(
             return EngineResult(engine="joern", status="crashed",
                                 reason=f"joern script exit {r2.returncode}: {r2.stderr[-300:]}")
         findings = _parse_alerts(r2.stdout, r2.stderr)
+        for finding in findings:
+            try:
+                finding.file = str(Path(finding.file).resolve().relative_to(abs_repo))
+            except ValueError:
+                pass
         return EngineResult(engine="joern", status="ok", findings=findings)
     finally:
         Path(script_path).unlink(missing_ok=True)

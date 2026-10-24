@@ -126,6 +126,12 @@ export interface LlmProfile {
   extra_headers?: Record<string, string>
   fallback_profile_id?: number | null
   model_prefix_policy?: string
+  priority?: number
+  pool_exclude?: boolean
+  context_window_k?: number
+  rate_per_second?: number
+  rate_per_minute?: number
+  streaming?: boolean
   [key: string]: unknown
 }
 
@@ -146,6 +152,9 @@ export interface AgentConfig {
   max_iterations?: number
   temperature_override?: number | null
   budget_override?: Record<string, unknown>
+  tools_allow?: string[]
+  skills_allow?: string[]
+  wrapup_prompt?: string
   [key: string]: unknown
 }
 

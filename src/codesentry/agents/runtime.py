@@ -22,6 +22,9 @@ class AgentRuntime:
     profile_id: int | None = None
     max_iterations: int = 8
     budget_override: dict = field(default_factory=dict)
+    tools_allow: list = field(default_factory=list)
+    skills_allow: list = field(default_factory=list)
+    wrapup_prompt: str = ""
 
     def system(self) -> str:
         if self.skills_block:
@@ -92,17 +95,30 @@ def prepare_agent(
     prompt = ""
     version: int | None = None
     fallback = True
+    prompt_vars = {"agent": agent, "scan_id": str(scan_id or 0)}
+
+    def _load(agent_name: str):
+        try:
+            return load_prompt(agent_name, prompt_vars)  # type: ignore[call-arg]
+        except TypeError:  # 兼容只接受 agent 的测试/旧实现
+            return load_prompt(agent_name)
+
     prompt_entry = ((snapshot or {}).get("prompt_versions") or {}).get(agent) if snapshot else None
     if prompt_entry and prompt_entry.get("version"):
+        from codesentry.agents.prompts import compose_prompt
         from codesentry.control.prompts import get_version
 
         pv = get_version(agent, int(prompt_entry["version"]))
         if pv:
-            prompt, version, fallback = pv["body"], pv["version"], False
+            try:
+                prompt = compose_prompt(agent, pv["body"], prompt_vars)
+                version, fallback = pv["version"], False
+            except KeyError:
+                prompt, version, fallback = _load(agent)
         else:
-            prompt, version, fallback = load_prompt(agent)
+            prompt, version, fallback = _load(agent)
     else:
-        prompt, version, fallback = load_prompt(agent)
+        prompt, version, fallback = _load(agent)
     if fallback:
         warnings.append("Prompt 回退到代码内种子（DB 无生效版本或不可用）")
 
@@ -111,6 +127,9 @@ def prepare_agent(
         skills = load_snapshot_skills(snap_skills)
     else:
         skills = load_assigned_skills(agent)
+    skills_allow = list(cfg.get("skills_allow") or [])
+    if skills_allow:
+        skills = [s for s in skills if getattr(s, "name", "") in skills_allow]
     settings = get_settings()
     block, sk_warnings = build_context_block(
         skills, settings.skill_max_per, settings.skill_max_total
@@ -120,7 +139,7 @@ def prepare_agent(
     role = role or str(cfg.get("model_role") or "deep")
 
     llm = None
-    if enabled and with_llm:
+    if enabled and with_llm and settings.llm_enabled:
         try:
             from codesentry.agents.llm import LLMClient
 
@@ -191,4 +210,7 @@ def prepare_agent(
         profile_id=getattr(llm, "profile_id", None),
         max_iterations=int(cfg.get("max_iterations") or 8),
         budget_override=cfg.get("budget_override") or {},
+        tools_allow=list(cfg.get("tools_allow") or []),
+        skills_allow=skills_allow,
+        wrapup_prompt=str(cfg.get("wrapup_prompt") or ""),
     )

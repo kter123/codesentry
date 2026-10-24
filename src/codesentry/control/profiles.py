@@ -15,7 +15,8 @@ _FIELDS = (
     "deep_model", "temperature", "max_tokens", "timeout_s", "max_concurrency",
     "input_price_per_1k", "output_price_per_1k", "capabilities", "extra_headers",
     "model_catalog", "model_protocols", "quota_windows", "billing_mode",
-    "fallback_profile_id", "enabled", "is_default",
+    "fallback_profile_id", "enabled", "is_default", "priority", "pool_exclude",
+    "context_window_k", "rate_per_second", "rate_per_minute", "streaming", "api_key_hint",
 )
 _JSON_FIELDS = {"capabilities", "extra_headers", "model_catalog", "model_protocols", "quota_windows"}
 
@@ -24,7 +25,8 @@ _COLUMNS = (
     " fast_model, deep_model, temperature, max_tokens, timeout_s, max_concurrency,"
     " input_price_per_1k, output_price_per_1k, capabilities, extra_headers, model_catalog,"
     " model_protocols, quota_windows, billing_mode, fallback_profile_id, enabled,"
-    " is_default, created_at, updated_at"
+    " is_default, created_at, updated_at, priority, pool_exclude, context_window_k,"
+    " rate_per_second, rate_per_minute, streaming, api_key_hint"
 )
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -96,6 +98,13 @@ class LLMProfile:
     is_default: bool = False
     created_at: str | None = None
     updated_at: str | None = None
+    priority: int = 0
+    pool_exclude: bool = False
+    context_window_k: int = 0
+    rate_per_second: float = 0.0
+    rate_per_minute: float = 0.0
+    streaming: bool = True
+    api_key_hint: str = ""
 
 
 def _row_to_profile(row: tuple) -> LLMProfile:
@@ -105,7 +114,8 @@ def _row_to_profile(row: tuple) -> LLMProfile:
         "timeout_s", "max_concurrency", "input_price_per_1k", "output_price_per_1k",
         "capabilities", "extra_headers", "model_catalog", "model_protocols",
         "quota_windows", "billing_mode", "fallback_profile_id", "enabled", "is_default",
-        "created_at", "updated_at",
+        "created_at", "updated_at", "priority", "pool_exclude", "context_window_k",
+        "rate_per_second", "rate_per_minute", "streaming", "api_key_hint",
     )
     d = dict(zip(keys, row))
     for k in ("created_at", "updated_at"):
@@ -143,6 +153,13 @@ def to_public(p: LLMProfile) -> dict:
         "is_default": p.is_default,
         "created_at": p.created_at,
         "updated_at": p.updated_at,
+        "priority": p.priority,
+        "pool_exclude": p.pool_exclude,
+        "context_window_k": p.context_window_k,
+        "rate_per_second": p.rate_per_second,
+        "rate_per_minute": p.rate_per_minute,
+        "streaming": p.streaming,
+        "api_key_hint": p.api_key_hint,
     }
 
 

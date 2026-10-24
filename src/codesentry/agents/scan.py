@@ -69,19 +69,50 @@ def run_scan_agent(state: dict) -> dict:
 
     if results and all(r.status != "ok" for r in results):
         return {
-            "phase": "report",
-            "messages": [*(state.get("messages") or []), "scan 中止：全部引擎不可用"],
-            "engine_findings": [],
+            "phase": "audit",
+            "engine_hints": [],
+            "messages": [*(state.get("messages") or []), "scan：全部引擎不可用，转为纯图审计"],
             "engine_results_meta": [r.model_dump() for r in results],
         }
 
-    findings = [f.model_dump() for r in results if r.status == "ok" for f in r.findings]
+    from codesentry.rag.graph_delta import apply_engine_hints, hints_from_engine_results
+
+    hints = hints_from_engine_results(results)
+    applied: dict[str, object] = {"applied": 0, "anchored": 0}
+    try:
+        applied = apply_engine_hints(
+            repo, int(state.get("graph_build_id") or 0), hints
+        )
+    except Exception as exc:  # noqa: BLE001 - 图写入失败不影响后续 Agent 审计
+        applied = {"applied": 0, "anchored": 0, "error": str(exc)[:200]}
+
+    engine_graph: dict = {}
+    project = str(Path(repo).resolve())
+    if any(r.engine == "joern" and r.status == "ok" for r in results):
+        try:
+            from codesentry.engines.joern_graph import run_joern_graph
+
+            engine_graph["joern"] = run_joern_graph(repo, project)
+        except Exception as exc:  # noqa: BLE001 - 引擎图失败降级
+            engine_graph["joern"] = {"ok": False, "error": str(exc)[:200]}
+    if any(r.engine == "codeql" and r.status == "ok" for r in results):
+        try:
+            from codesentry.engines.codeql_graph import run_codeql_graph
+
+            sarifs = sorted(Path(settings.work_dir).glob("codeql-*.sarif"))
+            if sarifs:
+                engine_graph["codeql"] = run_codeql_graph(str(sarifs[-1]), repo, project)
+        except Exception as exc:  # noqa: BLE001
+            engine_graph["codeql"] = {"ok": False, "error": str(exc)[:200]}
+    applied = {**applied, "engine_graph": engine_graph}
     return {
-        "phase": "retrieval",
-        "engine_findings": findings,
+        "phase": "audit",
+        "engine_hints": hints,
         "engine_results_meta": [r.model_dump() for r in results],
+        "graph_delta": applied,
         "messages": [
             *(state.get("messages") or []),
             *(f"engines gate blocked: {n}" for n in blocked),
+            f"scan: {len(hints)} engine hints → graph ({applied.get('applied', 0)} sinks)",
         ],
     }

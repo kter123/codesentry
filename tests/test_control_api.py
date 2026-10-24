@@ -147,10 +147,13 @@ def test_artifacts_and_calibration_endpoints():
 def test_graph_templates_and_prompt_evals():
     name = f"unit-tpl-{uuid.uuid4().hex[:8]}"
     cfg = {
-        "nodes": [{"id": n} for n in ("recon", "scan", "retrieval", "triage", "poc_gen", "report")],
-        "edges": [{"from": "recon", "to": "scan"}, {"from": "scan", "to": "retrieval"},
-                  {"from": "retrieval", "to": "triage"}, {"from": "triage", "to": "poc_gen"},
-                  {"from": "poc_gen", "to": "report"}],
+        "nodes": [{"id": n} for n in (
+            "recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report"
+        )],
+        "edges": [{"from": "recon", "to": "graph_build"},
+                  {"from": "graph_build", "to": "scan"}, {"from": "scan", "to": "audit"},
+                  {"from": "audit", "to": "triage"}, {"from": "triage", "to": "deploy"},
+                  {"from": "deploy", "to": "poc_gen"}, {"from": "poc_gen", "to": "report"}],
         "settings": {},
     }
     try:
@@ -213,6 +216,9 @@ def test_kb_ops_and_comments():
     }).status_code == 200
     rows = client.post("/api/kb/search", json={"query": "SSRF"}).json()["rows"]
     assert isinstance(rows, list)
+    prev = client.post("/api/kb/preview", json={"content": "第一段\n\n第二段", "size": 10}).json()
+    assert prev["count"] >= 1
+    assert client.get("/api/kb/chunks", params={"source": src}).status_code == 200
     r = client.post("/api/scans", data={"diff_text": "x"})
     sid = r.json()["scan_id"]
     try:
@@ -243,6 +249,20 @@ def test_retention_and_disk():
     with get_conn() as c, c.cursor() as cur:
         cur.execute("SELECT count(*) FROM scans WHERE id=%s", (sid,))
         assert int(cur.fetchone()[0]) == 0
+
+
+def test_assist_copilot(monkeypatch):
+    class FakeLLM:
+        def complete(self, system, user, model_role="deep"):
+            return "建议：补充不可信内容分隔符；明确 JSON 契约。"
+
+    monkeypatch.setattr(
+        "codesentry.agents.llm.LLMClient.for_agent",
+        classmethod(lambda cls, *a, **k: FakeLLM()),
+    )
+    r = client.post("/api/assist/copilot", json={"agent": "triage"})
+    assert r.status_code == 200, r.text
+    assert "建议" in r.json()["suggestion"]
 
 
 def test_health():

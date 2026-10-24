@@ -192,8 +192,15 @@
                   {{ lang }}
                 </el-tag>
                 <span class="muted">{{ graph.nodes?.length ?? 0 }} 节点 / {{ graph.edges?.length ?? 0 }} 边</span>
+                <div class="grow" />
+                <el-button size="small" type="primary" @click="router.push(`/scans/${scanId}/graph`)">
+                  打开图视图
+                </el-button>
               </div>
-              <el-table :data="graph.nodes || []" size="small" max-height="520">
+              <div class="muted" style="margin-bottom: 6px">
+                仅展示前 20 个节点；完整交互请点击「打开图视图」。
+              </div>
+              <el-table :data="(graph.nodes || []).slice(0, 20)" size="small" max-height="420">
                 <el-table-column prop="id" label="节点 ID" min-width="260" show-overflow-tooltip />
                 <el-table-column prop="kind" label="类型" width="100" />
                 <el-table-column prop="file" label="文件" min-width="220" show-overflow-tooltip />
@@ -257,6 +264,30 @@
                   :image-size="80"
                   description="没有 findings（扫描可能仍在运行，或该扫描未产出结果）"
                 />
+              </template>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane label="审计路径" name="paths">
+            <div class="toolbar">
+              <el-tag effect="plain">路径 {{ coverage.paths ?? auditPaths.length }}</el-tag>
+              <el-tag effect="plain">入口覆盖 {{ coverage.entries_covered ?? 0 }}</el-tag>
+              <el-tag effect="plain">Sink 覆盖 {{ coverage.sinks_covered ?? 0 }}</el-tag>
+              <el-tag effect="plain">轮次 {{ coverage.rounds ?? 0 }}</el-tag>
+              <div class="grow" />
+              <el-button size="small" :loading="pathsLoading" @click="loadPaths">刷新</el-button>
+            </div>
+            <el-table :data="auditPaths" size="small" max-height="480">
+              <el-table-column prop="id" label="#" width="60" />
+              <el-table-column prop="entry_key" label="入口" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="sink_key" label="Sink" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="feasibility" label="可行性" width="90" />
+              <el-table-column prop="score" label="分数" width="80" />
+              <el-table-column prop="round" label="轮次" width="70" />
+              <el-table-column prop="status" label="状态" width="90" />
+              <el-table-column prop="finding_id" label="Finding" width="80" />
+              <template #empty>
+                <el-empty :image-size="60" description="暂无审计路径（路径构建中或未发现）" />
               </template>
             </el-table>
           </el-tab-pane>
@@ -324,6 +355,32 @@
             </el-descriptions>
           </template>
 
+          <h3 class="panel-title" style="margin-top: 18px">审查评论</h3>
+          <div v-if="comments.length" class="comment-list">
+            <div v-for="c in comments" :key="c.id" class="comment-item">
+              <span class="mono muted">{{ c.author || 'anonymous' }} · {{ c.created_at }}</span>
+              <div>{{ c.body }}</div>
+            </div>
+          </div>
+          <el-empty v-else :image-size="48" description="暂无评论" />
+          <el-input
+            v-model="commentText"
+            type="textarea"
+            :rows="3"
+            placeholder="记录误报原因、复核结论或指派说明"
+            style="margin-top: 8px"
+          />
+          <el-button
+            size="small"
+            type="primary"
+            style="margin-top: 8px"
+            :loading="commentLoading"
+            :disabled="!commentText.trim()"
+            @click="addComment"
+          >
+            添加评论
+          </el-button>
+
           <template v-if="selected.execution_log">
             <h3 class="panel-title" style="margin-top: 18px">执行日志</h3>
             <pre class="pre-block">{{ selected.execution_log }}</pre>
@@ -375,7 +432,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Back, Refresh } from '@element-plus/icons-vue'
 
 import { api, ApiError, errorMessage } from '@/api/client'
@@ -416,12 +473,16 @@ interface LiveEvent {
 }
 
 const route = useRoute()
+const router = useRouter()
 const scanId = computed(() => Number(route.params.id))
 
 const scan = ref<ScanRow | null>(null)
 const timelineNodes = ref<NodeRun[]>([])
 const timelineSource = ref('')
 const graph = ref<GraphResponse | null>(null)
+const auditPaths = ref<Array<Record<string, unknown>>>([])
+const coverage = ref<Record<string, unknown>>({})
+const pathsLoading = ref(false)
 const findings = ref<GraphFinding[]>([])
 const findingNote = ref('')
 const loading = ref(false)
@@ -443,6 +504,9 @@ const assistLoading = ref(false)
 const assistError = ref('')
 const assistAnswer = ref('')
 const assistSources = ref<Array<{ type: string; node?: string; rule_id?: string }>>([])
+const comments = ref<Array<{ id: number; author: string; body: string; created_at: string }>>([])
+const commentText = ref('')
+const commentLoading = ref(false)
 let socket: WebSocket | undefined
 
 let pollTimer: number | undefined
@@ -457,6 +521,23 @@ function fmtDuration(ms?: number): string {
   if (ms === undefined || ms === null) return '—'
   if (ms < 1000) return `${ms} ms`
   return `${(ms / 1000).toFixed(2)} s`
+}
+
+async function loadPaths(): Promise<void> {
+  pathsLoading.value = true
+  try {
+    const [pathsRes, coverRes] = await Promise.allSettled([
+      api.get<{ paths?: Array<Record<string, unknown>> }>(
+        `/api/scans/${scanId.value}/paths`,
+        { limit: 200 },
+      ),
+      api.get<Record<string, unknown>>(`/api/scans/${scanId.value}/coverage`),
+    ])
+    auditPaths.value = pathsRes.status === 'fulfilled' ? (pathsRes.value.paths || []) : []
+    coverage.value = coverRes.status === 'fulfilled' ? coverRes.value : {}
+  } finally {
+    pathsLoading.value = false
+  }
 }
 
 async function loadArtifacts(): Promise<void> {
@@ -500,6 +581,36 @@ async function askAssist(): Promise<void> {
     assistError.value = `提问失败：${errorMessage(e)}`
   } finally {
     assistLoading.value = false
+  }
+}
+
+async function loadComments(findingId: number): Promise<void> {
+  try {
+    const res = await api.get<{ comments?: Array<{ id: number; author: string; body: string; created_at: string }> }>(
+      `/api/scans/${scanId.value}/comments`,
+      { finding_id: findingId },
+    )
+    comments.value = res.comments || []
+  } catch {
+    comments.value = []
+  }
+}
+
+async function addComment(): Promise<void> {
+  if (!selected.value?.id || !commentText.value.trim()) return
+  commentLoading.value = true
+  try {
+    await api.post(`/api/scans/${scanId.value}/comments`, {
+      finding_id: selected.value.id,
+      body: commentText.value,
+      author: 'analyst',
+    })
+    commentText.value = ''
+    await loadComments(selected.value.id)
+  } catch (e) {
+    error.value = `评论失败：${errorMessage(e)}`
+  } finally {
+    commentLoading.value = false
   }
 }
 
@@ -657,6 +768,7 @@ async function openFinding(row: GraphFinding): Promise<void> {
     }
   }
   detailLoading.value = false
+  void loadComments(row.id)
 }
 
 watch(scanId, () => {
@@ -666,6 +778,7 @@ watch(scanId, () => {
 })
 onMounted(() => {
   void load()
+  void loadPaths()
   connectSocket()
 })
 onUnmounted(() => {

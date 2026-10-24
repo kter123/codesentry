@@ -30,16 +30,15 @@ def _snapshot_agents() -> tuple[dict, dict, dict]:
 
 def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = None) -> int:
     """LangGraph 全链路审计：落库 + 报告。返回进程退出码。"""
+    from codesentry.agents.deploy_agent import run_deploy_agent
     from codesentry.agents.poc_gen import run_poc_gen
     from codesentry.agents.recon import build_profile
     from codesentry.agents.report import run_report
-    from codesentry.agents.retrieval import run_retrieval
     from codesentry.agents.scan import run_scan_agent
     from codesentry.agents.triage import run_triage
     from codesentry.control.bootstrap import ensure_control_schema
     from codesentry.db.pool import get_conn
     from codesentry.orchestrator.human_review import human_review_node
-    from codesentry.sandbox.deploy import run_deploy
 
     ensure_control_schema()
     from codesentry.config import get_settings
@@ -137,10 +136,9 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
 
     g = build_graph(
         scan_agent=run_scan_agent,
-        retrieval_agent=run_retrieval,
         triage_agent=run_triage,
         poc_agent=run_poc_gen,
-        deploy_agent=run_deploy,
+        deploy_agent=run_deploy_agent,
         report_agent_fn=lambda s, out=out_dir: run_report(s, out),
         checkpointer=cp,
         scan_id_holder=holder,
@@ -148,7 +146,7 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
     )
 
     try:
-        cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 30}
+        cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 200}
         final = g.invoke(st, config=cfg)
         if cp_ctx is not None:
             cp_ctx.__exit__(None, None, None)

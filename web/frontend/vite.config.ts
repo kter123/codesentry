@@ -27,5 +27,17 @@ export default defineConfig({
   build: {
     outDir: '../../src/codesentry/web/static',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('echarts')) return 'vendor-echarts'
+          if (id.includes('element-plus')) return 'vendor-element'
+          if (id.includes('node_modules/vue') || id.includes('vue-router') || id.includes('pinia')) {
+            return 'vendor-vue'
+          }
+          return undefined
+        },
+      },
+    },
   },
 })

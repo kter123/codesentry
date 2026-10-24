@@ -7,7 +7,7 @@ from codesentry.orchestrator.registry import all_nodes, default_nodes, get_node
 
 def test_registry_has_six_nodes():
     names = {n.name for n in all_nodes()}
-    assert names == {"recon", "scan", "retrieval", "triage", "poc_gen", "report"}
+    assert names == {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
     assert get_node("triage").requires_llm is True
     assert get_node("recon").required is True
 
@@ -19,7 +19,7 @@ def test_unknown_node_raises():
 
 def test_default_nodes_callable():
     d = default_nodes()
-    assert set(d) == {"recon", "scan", "retrieval", "triage", "poc_gen", "report"}
+    assert set(d) == {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
     assert all(callable(fn) for fn in d.values())
 
 
@@ -40,5 +40,5 @@ def test_explicit_override_still_works():
         report_agent_fn=lambda s: {"phase": "done"},
         recon_agent=lambda s: {"profile": {"languages": ["python"]}},
     )
-    final = g.invoke(new_state("/r", OSS=False), config={"recursion_limit": 10})
+    final = g.invoke(new_state("/r", OSS=False), config={"recursion_limit": 20})
     assert final["phase"] == "done"

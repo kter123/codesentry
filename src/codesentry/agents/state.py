@@ -1,9 +1,10 @@
 """AuditState 共享状态（agent.md §7.1）+ Agent 名常量。"""
 
 from datetime import UTC
-from typing import TypedDict
+from operator import add
+from typing import Annotated, TypedDict
 
-AGENT_NAMES = ("recon", "scan", "retrieval", "triage", "poc_gen", "report")
+AGENT_NAMES = ("recon", "scan", "audit", "triage", "deploy", "poc_gen", "report")
 
 # Supervisor 介入点（§7.3）
 INTERRUPT_INSUFFICIENT_EVIDENCE = "insufficient_evidence"
@@ -20,9 +21,24 @@ class AuditState(TypedDict, total=False):
     diff_scope: dict | None  # {base, head, files: [...]} 增量模式
     # recon
     profile: dict  # ScanProfile as dict
+    # 代码图（G1）
+    graph_build_id: int
+    graph_stats: dict
     # 引擎
-    engine_findings: list  # list[dict(Finding)]
+    engine_findings: list  # 兼容旧调用：引擎候选（不再作为最终 finding）
+    engine_hints: list  # 引擎转图后的 hint（审计线索）
     engine_results_meta: list  # 降级/状态元数据（报告用）
+    graph_delta: dict  # 引擎 → 图的增量统计
+    # 审计
+    candidate_findings: list  # AuditAgent 产出的候选
+    audit: dict  # audit 元数据（tool_trace/数量）
+    audit_feedback: str  # triage → audit 补查指令
+    # 路径中心审计（2026-10-24）
+    audit_paths: list  # 本批待审路径（由 audit_plan 覆盖）
+    path_results: Annotated[list[dict], add]  # Send 并行结果合并
+    audit_round: int
+    audit_batch: int
+    coverage: dict
     # triage
     triaged_findings: list  # 保留/降级/否决后（dict）
     evidence: dict  # finding_iid -> {'code_slices': [...], 'kb': [...], 'vuln_cases': [...]}
@@ -53,8 +69,20 @@ def new_state(repo_path: str, OSS: bool, scan_id: int | None = None) -> AuditSta
         license_declaration={"OSS": OSS, "declared_at": datetime.now(UTC).isoformat(timespec="seconds")},
         diff_scope=None,
         profile={},
+        graph_build_id=0,
+        graph_stats={},
         engine_findings=[],
+        engine_hints=[],
         engine_results_meta=[],
+        graph_delta={},
+        candidate_findings=[],
+        audit={},
+        audit_feedback="",
+        audit_paths=[],
+        path_results=[],
+        audit_round=0,
+        audit_batch=0,
+        coverage={},
         triaged_findings=[],
         evidence={},
         poc_results={},

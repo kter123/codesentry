@@ -16,9 +16,11 @@ class NodeSpec:
 
 NODE_SPECS: dict[str, NodeSpec] = {
     "recon": NodeSpec("recon", "仓库画像与扫描计划", required=True),
-    "scan": NodeSpec("scan", "三引擎并行调度与许可 Gate", requires_llm=False),
-    "retrieval": NodeSpec("retrieval", "GraphRAG 证据检索"),
-    "triage": NodeSpec("triage", "LLM 可达性验证与降噪", requires_llm=True),
+    "graph_build": NodeSpec("graph_build", "代码图构建（增量）", required=True),
+    "scan": NodeSpec("scan", "引擎执行并转为图增量", requires_llm=False),
+    "audit": NodeSpec("audit", "Agent 主动代码审计", requires_llm=True),
+    "triage": NodeSpec("triage", "Agent 对抗性验证与降噪", requires_llm=True),
+    "deploy": NodeSpec("deploy", "Agent 自主部署", requires_llm=True),
     "poc_gen": NodeSpec("poc_gen", "PoC 生成与验证", requires_llm=True),
     "report": NodeSpec("report", "报告生成", required=True),
 }
@@ -37,10 +39,12 @@ def all_nodes() -> list[NodeSpec]:
 
 def default_nodes() -> dict[str, Callable]:
     """懒加载默认节点函数，避免 registry 导入 agents 造成循环。"""
+    from codesentry.agents.audit import run_audit_agent
+    from codesentry.agents.deploy_agent import run_deploy_agent
+    from codesentry.agents.graph_builder import run_graph_build
     from codesentry.agents.poc_gen import run_poc_gen
     from codesentry.agents.recon import run_recon
     from codesentry.agents.report import run_report
-    from codesentry.agents.retrieval import run_retrieval
     from codesentry.agents.scan import run_scan_agent
     from codesentry.agents.triage import run_triage
 
@@ -49,9 +53,11 @@ def default_nodes() -> dict[str, Callable]:
 
     return {
         "recon": run_recon,
+        "graph_build": run_graph_build,
         "scan": run_scan_agent,
-        "retrieval": run_retrieval,
+        "audit": run_audit_agent,
         "triage": run_triage,
+        "deploy": run_deploy_agent,
         "poc_gen": run_poc_gen,
         "report": default_report,
     }

@@ -34,7 +34,7 @@ def test_graph_injects_runtime_only_when_declared(monkeypatch):
         checkpointer=None,
         scan_id_holder={"scan_id": 1, "budget": None},
     )
-    g.invoke(new_state("/r", OSS=False), config={"recursion_limit": 10})
+    g.invoke(new_state("/r", OSS=False), config={"recursion_limit": 20})
     assert seen["runtime"] is not None
 
 
@@ -98,7 +98,7 @@ def test_disabled_non_llm_node_is_skipped(monkeypatch):
 
 def test_snapshot_agents_shape():
     prompts, skills, llms = _snapshot_agents()
-    assert set(prompts) == {"recon", "scan", "retrieval", "triage", "poc_gen", "report"}
+    assert set(prompts) == {"recon", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
     for v in prompts.values():
         assert "version" in v and "fallback" in v
     assert isinstance(skills, dict) and isinstance(llms, dict)

@@ -19,4 +19,5 @@ def test_scan_respects_engine_allowlist(monkeypatch):
     s["profile"] = {"languages": ["python"]}
     u = scan_mod.run_scan_agent(s)
     assert seen == ["run_semgrep"]
-    assert u["engine_findings"] == []
+    assert u["engine_hints"] == []
+    assert u["phase"] == "audit"

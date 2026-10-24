@@ -24,3 +24,9 @@ def test_markdown_license_metadata():
     md = render_markdown([], profile_languages=["python"],
                          license_declaration={"OSS": False, "declared_at": "t"})
     assert "闭源" in md
+
+
+def test_markdown_uses_fix_advice():
+    md = render_markdown([_f(fix_advice="改用参数化查询")], profile_languages=["python"])
+    assert "改用参数化查询" in md
+    assert "M3 由 TriageAgent 补全" not in md

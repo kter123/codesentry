@@ -12,10 +12,10 @@ def _fresh(monkeypatch):
 
 def test_budget_defaults(monkeypatch):
     s = _fresh(monkeypatch)
-    assert s.max_tokens == 500_000
-    assert s.max_tool_calls == 500
-    assert s.max_cost_usd == 10.0
-    assert s.max_findings == 200
+    assert s.max_tokens == 1_200_000
+    assert s.max_tool_calls == 1_500
+    assert s.max_cost_usd == 30.0
+    assert s.max_findings == 500
 
 
 def test_switch_defaults(monkeypatch):

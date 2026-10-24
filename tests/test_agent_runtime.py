@@ -16,6 +16,7 @@ def _skill():
 
 @pytest.fixture
 def patched(monkeypatch):
+    monkeypatch.setenv("CODESENTRY_LLM_ENABLED", "true")
     monkeypatch.setattr("codesentry.agents.prompts.load_prompt", lambda agent: ("SYS", 3, False))
     monkeypatch.setattr("codesentry.control.skills.load_assigned_skills", lambda agent: [_skill()])
     monkeypatch.setattr(

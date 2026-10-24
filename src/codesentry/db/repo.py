@@ -11,36 +11,40 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def upsert_code_chunks(project: str, chunks: list[Chunk], embeddings: list[list[float]]) -> int:
-    """按 content_sha256 幂等写入；每个 chunk 必须带同维 embedding。返回新写入数。"""
+def upsert_code_chunks(project: str, chunks: list[Chunk], embeddings: list[list[float] | None]) -> int:
+    """按 content_sha256 幂等写入；embedding 为 None 时走 FTS。返回新写入数。"""
     assert len(chunks) == len(embeddings)
-    inserted = 0
-    with get_conn() as conn:
-        for c, vec in zip(chunks, embeddings):
-            h = sha256(c.content)
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM code_chunks WHERE content_sha256 = %s AND project = %s",
-                    (h, project),
-                )
-                if cur.fetchone():
-                    continue
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO code_chunks
-                        (project, path, symbol_name, symbol_kind, start_line, end_line,
-                         signature, docstring, call_refs, content, lang, content_sha256, embedding)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::vector)
-                    """,
-                    (
-                        project, c.path, c.symbol_name, c.symbol_kind,
-                        c.start_line, c.end_line, c.signature, c.docstring,
-                        json.dumps(c.call_refs), c.content, c.lang, h,
-                        _vec_literal(vec),
-                    ),
-                )
-                inserted += 1
+    if not chunks:
+        return 0
+    digests = [sha256(c.content) for c in chunks]
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT content_sha256 FROM code_chunks WHERE project=%s AND content_sha256 = ANY(%s)",
+            (project, digests),
+        )
+        existing = {r[0] for r in cur.fetchall()}
+        rows = []
+        inserted = 0
+        for c, vec, h in zip(chunks, embeddings, digests):
+            if h in existing:
+                continue
+            existing.add(h)
+            rows.append((
+                project, c.path, c.symbol_name, c.symbol_kind, c.start_line, c.end_line,
+                c.signature, c.docstring, json.dumps(c.call_refs), c.content, c.lang, h,
+                _vec_literal(vec) if vec else None,
+            ))
+            inserted += 1
+        if rows:
+            cur.executemany(
+                """
+                INSERT INTO code_chunks
+                    (project, path, symbol_name, symbol_kind, start_line, end_line,
+                     signature, docstring, call_refs, content, lang, content_sha256, embedding)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::vector)
+                """,
+                rows,
+            )
         conn.commit()
     return inserted
 

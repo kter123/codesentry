@@ -20,6 +20,7 @@ def _parse_json(text: str) -> dict | None:
 
 def build_tools(state: dict) -> dict[str, Callable]:
     repo = Path(str(state.get("repo_path") or ".")).resolve()
+    project = str(repo)
 
     def read_source(path: str, start: int = 1, end: int = 120) -> str:
         target = (repo / str(path)).resolve()
@@ -35,13 +36,11 @@ def build_tools(state: dict) -> dict[str, Callable]:
 
     def search_code(query: str, top_k: int = 3) -> str:
         try:
+            from codesentry.rag.embedding import embed_texts
             from codesentry.rag.retrieve import hybrid_search
 
-            class _Emb:
-                def embed(self, texts):
-                    return [[0.0] * 8 for _ in texts]
-
-            rows = hybrid_search("code", str(query), [0.0] * 8, top_k=int(top_k))
+            vec = embed_texts([str(query)])[0]
+            rows = hybrid_search("code", str(query), vec, top_k=int(top_k))
             return json.dumps(rows, ensure_ascii=False)[:8000]
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e}"
@@ -52,7 +51,132 @@ def build_tools(state: dict) -> dict[str, Callable]:
             return json.dumps(evd.get(str(key), {}), ensure_ascii=False)[:8000]
         return json.dumps(evd, ensure_ascii=False)[:8000]
 
-    return {"read_source": read_source, "search_code": search_code, "read_evidence": read_evidence}
+    def graph_search(query: str, kinds: list[str] | None = None, limit: int = 20) -> str:
+        try:
+            from codesentry.db.pool import get_conn
+
+            sql = ("SELECT node_key, kind, name, path, start_line, end_line FROM graph_nodes"
+                   " WHERE project=%s AND (name ILIKE %s OR qualified_name ILIKE %s)")
+            params: list = [project, f"%{query}%", f"%{query}%"]
+            if kinds:
+                sql += " AND kind = ANY(%s)"
+                params.append(list(kinds))
+            sql += " ORDER BY (kind='endpoint') DESC, (kind='function') DESC LIMIT %s"
+            params.append(max(1, min(int(limit), 100)))
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+            return json.dumps([
+                {"key": r[0], "kind": r[1], "name": r[2], "path": r[3],
+                 "start": r[4], "end": r[5]} for r in rows
+            ], ensure_ascii=False)[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def graph_node(key: str) -> str:
+        try:
+            from codesentry.rag.graph_query import node
+
+            found = node(project, str(key))
+            if not found:
+                return "NOT FOUND"
+            body = ""
+            try:
+                lines = (repo / found["path"]).read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                start = max(1, int(found["start"]))
+                end = min(len(lines), int(found["end"]))
+                body = "\n".join(f"{i}: {lines[i - 1]}" for i in range(start, end + 1))[:6000]
+            except OSError:
+                pass
+            return json.dumps({**found, "source": body}, ensure_ascii=False)[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def graph_neighbors(key: str, depth: int = 1, edge_kinds: list[str] | None = None) -> str:
+        try:
+            from codesentry.rag.graph_query import neighbors
+
+            result = neighbors(project, str(key), depth=int(depth), edge_kinds=edge_kinds)
+            return json.dumps(result, ensure_ascii=False)[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def graph_paths(src: str, dst: str, max_depth: int = 6) -> str:
+        try:
+            from codesentry.rag.graph_query import paths
+
+            return json.dumps(paths(project, str(src), str(dst), max_depth=int(max_depth)),
+                              ensure_ascii=False)[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def graph_entrypoints(permission: str = "") -> str:
+        try:
+            from codesentry.rag.graph_query import entrypoints
+
+            rows = entrypoints(project, permission or None)
+            return json.dumps(rows, ensure_ascii=False)[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def kb_search(query: str, top_k: int = 5) -> str:
+        try:
+            from codesentry.rag.kb_ops import search
+
+            return json.dumps(search(query, top_k=int(top_k)), ensure_ascii=False)[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def vuln_cases(query: str, cwe: int | None = None, limit: int = 5) -> str:
+        try:
+            from codesentry.rag.experience import search_vuln_cases
+
+            return json.dumps(
+                search_vuln_cases(query, cwe=cwe, limit=int(limit)), ensure_ascii=False
+            )[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def audit_patterns(query: str, cwe: int | None = None, limit: int = 5) -> str:
+        try:
+            from codesentry.rag.experience import search_patterns
+
+            return json.dumps(
+                search_patterns(query, cwe=cwe, limit=int(limit)), ensure_ascii=False
+            )[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def scan_strategies(query: str, limit: int = 3) -> str:
+        try:
+            from codesentry.rag.experience import search_strategies
+
+            return json.dumps(
+                search_strategies(query, limit=int(limit)), ensure_ascii=False
+            )[:8000]
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+
+    def engine_hints() -> str:
+        return json.dumps(state.get("engine_hints") or [], ensure_ascii=False)[:8000]
+
+    return {
+        "read_source": read_source,
+        "search_code": search_code,
+        "read_evidence": read_evidence,
+        "graph_search": graph_search,
+        "graph_node": graph_node,
+        "graph_neighbors": graph_neighbors,
+        "graph_paths": graph_paths,
+        "graph_entrypoints": graph_entrypoints,
+        "kb_search": kb_search,
+        "vuln_cases": vuln_cases,
+        "audit_patterns": audit_patterns,
+        "scan_strategies": scan_strategies,
+        "engine_hints": engine_hints,
+    }
 
 
 def run_tool_loop(

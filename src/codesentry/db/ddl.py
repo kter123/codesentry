@@ -179,6 +179,42 @@ CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.llm_profiles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS pool_exclude BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS context_window_k INT NOT NULL DEFAULT 0;
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS rate_per_second DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS rate_per_minute DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS streaming BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE {BUSINESS_SCHEMA}.llm_profiles ADD COLUMN IF NOT EXISTS api_key_hint TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.llm_profile_health (
+    profile_id BIGINT PRIMARY KEY REFERENCES {BUSINESS_SCHEMA}.llm_profiles(id) ON DELETE CASCADE,
+    fails INT NOT NULL DEFAULT 0,
+    trips INT NOT NULL DEFAULT 0,
+    open_until TIMESTAMPTZ,
+    last_error TEXT NOT NULL DEFAULT '',
+    last_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.llm_calls (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT,
+    agent TEXT NOT NULL DEFAULT '',
+    profile_id BIGINT,
+    model TEXT NOT NULL DEFAULT '',
+    request_preview TEXT NOT NULL DEFAULT '',
+    response_preview TEXT NOT NULL DEFAULT '',
+    prompt_tokens INT NOT NULL DEFAULT 0,
+    completion_tokens INT NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    latency_ms INT NOT NULL DEFAULT 0,
+    ok BOOLEAN NOT NULL DEFAULT TRUE,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS llm_calls_created_idx ON {BUSINESS_SCHEMA}.llm_calls (created_at DESC);
+CREATE INDEX IF NOT EXISTS llm_calls_profile_idx ON {BUSINESS_SCHEMA}.llm_calls (profile_id, created_at DESC);
+
 -- M6.1 控制平面：LLM 用量明细
 CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.llm_usage (
     id BIGSERIAL PRIMARY KEY,
@@ -248,6 +284,22 @@ ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS max_iterati
 ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS temperature_override REAL;
 ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS ab_json JSONB NOT NULL DEFAULT '{{}}';
 ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS tools_allow JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS skills_allow JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE {BUSINESS_SCHEMA}.agent_configs ADD COLUMN IF NOT EXISTS wrapup_prompt TEXT NOT NULL DEFAULT '';
+
+-- Prompt 变量目录（M1）：UI 可插入变量，渲染时 missingkey=error
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.prompt_vars (
+    agent TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    example TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'runtime',
+    PRIMARY KEY (agent, name)
+);
+
+ALTER TABLE {BUSINESS_SCHEMA}.prompt_versions ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT '';
+ALTER TABLE {BUSINESS_SCHEMA}.prompt_versions ADD COLUMN IF NOT EXISTS updated_by TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE {BUSINESS_SCHEMA}.prompt_versions ADD COLUMN IF NOT EXISTS body_sha256 TEXT NOT NULL DEFAULT '';
 WITH ranked AS (
@@ -393,6 +445,124 @@ CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.code_graph_edges (
 );
 CREATE INDEX IF NOT EXISTS code_graph_edges_src_idx ON {BUSINESS_SCHEMA}.code_graph_edges (project, src_key);
 CREATE INDEX IF NOT EXISTS code_graph_edges_dst_idx ON {BUSINESS_SCHEMA}.code_graph_edges (project, dst_key);
+
+-- 代码图 v2：项目级增量图（G1）。旧 code_graph_* 保留一个版本周期。
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.graph_builds (
+    id BIGSERIAL PRIMARY KEY,
+    project TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'full',
+    status TEXT NOT NULL DEFAULT 'ok',
+    git_sha TEXT NOT NULL DEFAULT '',
+    stats JSONB NOT NULL DEFAULT '{{}}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS graph_builds_project_idx ON {BUSINESS_SCHEMA}.graph_builds (project, id DESC);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.graph_files (
+    project TEXT NOT NULL,
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT '',
+    build_id BIGINT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project, path)
+);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.graph_nodes (
+    id BIGSERIAL PRIMARY KEY,
+    project TEXT NOT NULL,
+    node_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    qualified_name TEXT NOT NULL DEFAULT '',
+    start_line INT NOT NULL DEFAULT 0,
+    end_line INT NOT NULL DEFAULT 0,
+    lang TEXT NOT NULL DEFAULT '',
+    attrs JSONB NOT NULL DEFAULT '{{}}',
+    build_id BIGINT,
+    UNIQUE (project, node_key)
+);
+CREATE INDEX IF NOT EXISTS graph_nodes_kind_idx ON {BUSINESS_SCHEMA}.graph_nodes (project, kind);
+CREATE INDEX IF NOT EXISTS graph_nodes_path_idx ON {BUSINESS_SCHEMA}.graph_nodes (project, path);
+CREATE INDEX IF NOT EXISTS graph_nodes_name_idx ON {BUSINESS_SCHEMA}.graph_nodes (project, name);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.graph_edges (
+    id BIGSERIAL PRIMARY KEY,
+    project TEXT NOT NULL,
+    src_key TEXT NOT NULL,
+    dst_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    provenance TEXT NOT NULL DEFAULT 'tree_sitter',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    attrs JSONB NOT NULL DEFAULT '{{}}',
+    build_id BIGINT,
+    UNIQUE (project, src_key, dst_key, kind)
+);
+CREATE INDEX IF NOT EXISTS graph_edges_src_idx ON {BUSINESS_SCHEMA}.graph_edges (project, src_key, kind);
+CREATE INDEX IF NOT EXISTS graph_edges_dst_idx ON {BUSINESS_SCHEMA}.graph_edges (project, dst_key, kind);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.graph_endpoints (
+    id BIGSERIAL PRIMARY KEY,
+    project TEXT NOT NULL,
+    endpoint_key TEXT NOT NULL,
+    method TEXT NOT NULL DEFAULT '',
+    route TEXT NOT NULL DEFAULT '',
+    permission TEXT NOT NULL DEFAULT '其他',
+    path TEXT NOT NULL DEFAULT '',
+    line INT NOT NULL DEFAULT 0,
+    evidence TEXT NOT NULL DEFAULT '',
+    mismatch BOOLEAN NOT NULL DEFAULT FALSE,
+    attrs JSONB NOT NULL DEFAULT '{{}}',
+    build_id BIGINT,
+    UNIQUE (project, endpoint_key)
+);
+CREATE INDEX IF NOT EXISTS graph_endpoints_project_idx ON {BUSINESS_SCHEMA}.graph_endpoints (project, permission);
+
+-- 路径中心审计（2026-10-24）：sink 反向路径队列与多轮统计
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.audit_paths (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT NOT NULL,
+    path_key CHAR(64) NOT NULL,
+    round INT NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'entry_to_sink',
+    entry_key TEXT NOT NULL DEFAULT '',
+    source_key TEXT NOT NULL DEFAULT '',
+    sink_key TEXT NOT NULL DEFAULT '',
+    nodes JSONB NOT NULL DEFAULT '[]',
+    edges JSONB NOT NULL DEFAULT '[]',
+    length INT NOT NULL DEFAULT 0,
+    score REAL NOT NULL DEFAULT 0,
+    feasibility TEXT NOT NULL DEFAULT 'weak',
+    status TEXT NOT NULL DEFAULT 'pending',
+    finding_id BIGINT,
+    evidence JSONB NOT NULL DEFAULT '{{}}',
+    attempts INT NOT NULL DEFAULT 0,
+    leased_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scan_id, path_key)
+);
+CREATE INDEX IF NOT EXISTS audit_paths_scan_status_idx
+    ON {BUSINESS_SCHEMA}.audit_paths (scan_id, status, round);
+CREATE INDEX IF NOT EXISTS audit_paths_scan_sink_idx
+    ON {BUSINESS_SCHEMA}.audit_paths (scan_id, sink_key);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.audit_rounds (
+    scan_id BIGINT NOT NULL,
+    round INT NOT NULL,
+    paths_total INT NOT NULL DEFAULT 0,
+    paths_new INT NOT NULL DEFAULT 0,
+    paths_audited INT NOT NULL DEFAULT 0,
+    findings INT NOT NULL DEFAULT 0,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    PRIMARY KEY (scan_id, round)
+);
+
+ALTER TABLE {BUSINESS_SCHEMA}.scans ADD COLUMN IF NOT EXISTS graph_build_id BIGINT;
+ALTER TABLE {BUSINESS_SCHEMA}.scans ADD COLUMN IF NOT EXISTS agent_snapshot JSONB NOT NULL DEFAULT '{{}}';
 
 CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.review_comments (
     id BIGSERIAL PRIMARY KEY,

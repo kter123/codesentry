@@ -30,7 +30,7 @@ def test_graph_runs_full_chain(tmp_path, monkeypatch):
         scan_id_holder=holder,
     )
     st = new_state(str(repo), OSS=False)
-    final = g.invoke(st, config={"recursion_limit": 10})
+    final = g.invoke(st, config={"recursion_limit": 20})
     assert final["phase"] == "done"
     assert final["profile"].get("languages") == ["python"]
 
@@ -38,7 +38,7 @@ def test_graph_runs_full_chain(tmp_path, monkeypatch):
 def test_route_insufficient_evidence():
     s = new_state("/r", OSS=False)
     s["messages"] = ["triage: insufficient_evidence for x@1"]
-    assert route_after_triage(s) == "retrieval"
+    assert route_after_triage(s) == "audit"
     s["replan_count"] = 99
     assert route_after_triage(s) == "poc_gen"  # max replans 熔断
 

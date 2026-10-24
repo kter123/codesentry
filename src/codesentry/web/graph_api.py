@@ -8,7 +8,6 @@ from pathlib import Path
 from fastapi import HTTPException, Query
 
 from codesentry.db.pool import get_conn
-from codesentry.rag.chunker import chunk_code
 
 
 def _work_root() -> Path:
@@ -37,78 +36,123 @@ def _scan_repo(scan_id: int) -> Path:
 
 
 @app.get("/api/scans/{scan_id}/graph")
-async def get_graph(scan_id: int) -> dict:
-    """合成调用图：节点=file/function，边=CALLS，findings 挂 sink 节点。"""
+async def get_graph(scan_id: int, limit: int = Query(1200, ge=100, le=10000)) -> dict:
+    """真实代码图：graph_nodes/graph_edges + findings 锚定 + endpoint 资产。"""
     repo = _scan_repo(scan_id)
+    project = str(repo)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, rule_id, cwe, severity, confidence, file, line, message, engine, verdict FROM findings WHERE scan_id=%s",
+            "SELECT id, rule_id, cwe, severity, confidence, file, line, message, engine, verdict"
+            " FROM findings WHERE scan_id=%s",
             (scan_id,),
         )
         findings = cur.fetchall()
+        cur.execute(
+            "SELECT node_key, kind, name, path, qualified_name, start_line, end_line, lang"
+            " FROM graph_nodes WHERE project=%s"
+            " ORDER BY CASE kind WHEN 'endpoint' THEN 0 WHEN 'route' THEN 1"
+            " WHEN 'function' THEN 2 WHEN 'method' THEN 3 WHEN 'class' THEN 4"
+            " WHEN 'file' THEN 5 ELSE 6 END, id LIMIT %s",
+            (project, limit),
+        )
+        node_rows = cur.fetchall()
+        cur.execute(
+            "SELECT src_key, dst_key, kind, provenance, confidence FROM graph_edges"
+            " WHERE project=%s LIMIT %s",
+            (project, limit * 4),
+        )
+        edge_rows = cur.fetchall()
+        cur.execute(
+            "SELECT endpoint_key, method, route, permission, path, line, evidence, mismatch"
+            " FROM graph_endpoints WHERE project=%s ORDER BY route, method",
+            (project,),
+        )
+        endpoint_rows = cur.fetchall()
+        cur.execute("SELECT graph_build_id FROM scans WHERE id=%s", (scan_id,))
+        build_row = cur.fetchone()
 
-    fcols = ["id", "rule_id", "cwe", "severity", "confidence", "file", "line", "message", "engine", "verdict"]
-    finding_by_file: dict[str, list] = {}
+    fcols = ["id", "rule_id", "cwe", "severity", "confidence", "file", "line",
+             "message", "engine", "verdict"]
+    by_file: dict[str, list[dict]] = {}
     for r in findings:
         f = dict(zip(fcols, r))
-        finding_by_file.setdefault(f["file"], []).append(f)
-        # 相对化
         try:
             f["file_rel"] = str(Path(f["file"]).resolve().relative_to(repo))
         except ValueError:
             f["file_rel"] = Path(f["file"]).name
+        by_file.setdefault(f["file_rel"], []).append(f)
 
-    # 合成图：python 仓库用 chunker；其他语言 findings-only 退化图
+    nodes: dict[str, dict] = {}
+    for key, kind, name, path, qual, start, end, lang in node_rows:
+        nodes[key] = {
+            "id": key, "key": key, "kind": kind, "name": name, "file": path,
+            "qualified_name": qual, "start": start, "end": end, "lang": lang,
+            "findings": [],
+        }
+    for file_path, items in by_file.items():
+        candidates = [n for n in nodes.values() if n["file"] == file_path]
+        for f in items:
+            line = int(f.get("line") or 0)
+            container = [n for n in candidates if n["start"] <= line <= n["end"]]
+            target = min(container, key=lambda n: n["end"] - n["start"]) if container else None
+            if target is None:
+                target = next((n for n in candidates if n["kind"] in ("file", "endpoint")), None)
+            if target is not None:
+                target["findings"].append(f)
+
+    edges = [
+        {"source": s, "target": d, "kind": k, "provenance": p, "confidence": c}
+        for s, d, k, p, c in edge_rows
+    ]
+    endpoints = [
+        {"key": r[0], "method": r[1], "route": r[2], "permission": r[3],
+         "file": r[4], "line": r[5], "evidence": r[6], "mismatch": r[7]}
+        for r in endpoint_rows
+    ]
     from codesentry.scan_orchestrator import detect_languages
 
     langs = detect_languages(str(repo))
-    nodes: dict[str, dict] = {}
-    edges: list[dict] = []
-
-    if "python" in langs:
-        for root, _dirs, files in os.walk(repo):
-            for name in files:
-                if not name.endswith(".py"):
-                    continue
-                p = Path(root) / name
-                try:
-                    src = p.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                rel = str(p.relative_to(repo))
-                for c in chunk_code(str(p), "python", src):
-                    if c.symbol_kind != "function":
-                        continue
-                    nid = rel + "::" + c.symbol_name
-                    nodes[nid] = {
-                        "id": nid, "kind": "function", "file": rel,
-                        "name": c.symbol_name, "start": c.start_line, "end": c.end_line,
-                        "findings": [],
-                    }
-                    for callee in (c.call_refs or [])[:20]:
-                        edges.append({"source": nid, "target": callee, "kind": "CALLS"})
-
-    # findings 挂到所属 function 节点（文件内行号匹配特征）；否则挂 file 节点
-    for filek, fs in finding_by_file.items():
-        targets = [nid for nid, n in nodes.items() if n["file"] == filek]
-        pick = None
-        for f in fs:
-            ln = f["line"] or 0
-            pick = next((t for t in targets if nodes[t]["start"] <= ln <= nodes[t]["end"]), targets[0] if targets else None)
-            if pick:
-                nodes[pick]["findings"].append(f)
-
-    graph_mode = "callgraph" if "python" in langs else "findings-only"
-    if not nodes and finding_by_file:
-        for filek, fs in finding_by_file.items():
-            nid = "file::" + filek
-            nodes[nid] = {"id": nid, "kind": "file", "file": filek, "name": Path(filek).name,
-                          "start": 0, "end": 0, "findings": fs}
-        graph_mode = "findings-only"
+    mode = "graph" if nodes else "findings-only"
+    if not nodes and by_file:
+        for file_path, items in by_file.items():
+            nid = "file::" + file_path
+            nodes[nid] = {"id": nid, "key": nid, "kind": "file", "file": file_path,
+                          "name": Path(file_path).name, "start": 0, "end": 0,
+                          "findings": items}
     return {
-        "scan_id": scan_id, "mode": graph_mode, "languages": langs,
-        "nodes": list(nodes.values()), "edges": edges,
+        "scan_id": scan_id, "mode": mode, "languages": langs,
+        "graph_build_id": build_row[0] if build_row else None,
+        "nodes": list(nodes.values()), "edges": edges, "endpoints": endpoints,
     }
+
+
+@app.get("/api/scans/{scan_id}/graph/endpoints")
+async def graph_endpoints(scan_id: int, permission: str = "") -> dict:
+    repo = _scan_repo(scan_id)
+    from codesentry.rag.graph_query import entrypoints
+
+    return {"scan_id": scan_id, "endpoints": entrypoints(str(repo), permission or None)}
+
+
+@app.get("/api/scans/{scan_id}/graph/paths")
+async def graph_paths(scan_id: int, src: str = Query(...), dst: str = Query(...),
+                      max_depth: int = Query(6, ge=1, le=8)) -> dict:
+    repo = _scan_repo(scan_id)
+    from codesentry.rag.graph_query import paths
+
+    return {"scan_id": scan_id, "paths": paths(str(repo), src, dst, max_depth=max_depth)}
+
+
+@app.get("/api/scans/{scan_id}/graph/node/{key:path}")
+async def graph_node(scan_id: int, key: str) -> dict:
+    repo = _scan_repo(scan_id)
+    from codesentry.rag.graph_query import neighbors, node
+
+    found = node(str(repo), key)
+    if not found:
+        raise HTTPException(404, "node not found")
+    return {"scan_id": scan_id, "node": found,
+            "neighbors": neighbors(str(repo), key, depth=1)}
 
 
 @app.get("/api/scans/{scan_id}/findings")
@@ -168,3 +212,37 @@ async def get_source(
         "total_lines": len(lines),
         "lines": [{"no": start + i, "text": t} for i, t in enumerate(window)],
     }
+
+
+@app.get("/api/scans/{scan_id}/paths")
+async def list_audit_paths(scan_id: int, status: str = "", round: int | None = None,
+                           limit: int = 100) -> dict:
+    from codesentry.control.audit_paths import list_paths
+
+    return {"scan_id": scan_id,
+            "paths": list_paths(scan_id, status or None, round, limit)}
+
+
+@app.get("/api/scans/{scan_id}/paths/{path_id}")
+async def get_audit_path(scan_id: int, path_id: int) -> dict:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, path_key, round, kind, entry_key, source_key, sink_key, nodes,"
+            " edges, length, score, feasibility, status, finding_id, evidence"
+            " FROM audit_paths WHERE scan_id=%s AND id=%s",
+            (scan_id, path_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "path not found")
+    keys = ["id", "path_key", "round", "kind", "entry_key", "source_key", "sink_key",
+            "nodes", "edges", "length", "score", "feasibility", "status",
+            "finding_id", "evidence"]
+    return dict(zip(keys, row))
+
+
+@app.get("/api/scans/{scan_id}/coverage")
+async def audit_coverage(scan_id: int) -> dict:
+    from codesentry.control.audit_paths import coverage
+
+    return {"scan_id": scan_id, **coverage(scan_id)}

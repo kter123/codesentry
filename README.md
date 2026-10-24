@@ -7,6 +7,10 @@
 - M0–M5 已完成：脚手架、三引擎、RAG、六 Agent 流水线、质量评测、WebUI。
 - M6.1–M6.5 已完成（2026-10-20）：控制面（LLM Profile / Agent 绑定 / Prompt / Skills / 用量 / 审计 / 认证）、Docker 沙箱部署、PoC canary 实证、Artifacts 审查链、置信度校准、Vue 3 控制台。
 - M6.6 部分完成：graph_templates、Prompt 评测记录、SARIF 下载、replay；A/B 自动评测、webhook/通知、多租户与 AI 辅助待续。
+- 2026-10-23 图谱核心（G1–G4）：六语言 tree-sitter 抽取、项目级增量图构建、`graph_build` 节点、真实向量检索、GraphRAG 查询 API 与 Agent 图工具、力导向图页面。
+- 2026-10-23 管理面（M1–M2）：Prompt 三段式（可编辑正文 + 代码固定尾 + 变量）、Agent 工具/技能白名单、LLM 优先级池与熔断、原始调用记录。
+- 2026-10-24 路径中心审计：引擎→图 → sink 反向路径 → 多轮 Agent 路径审计 → Triage → DeployAgent → PoC；Agent/Prompt 全可配置；RAG 工具化。
+- 2026-10-24 引擎 Dataflow 入图：Joern calls/dataflow、CodeQL codeFlows 写入图；entry-only 入口审计路径；本地 bge-m3（1024 维）真实入库。
 
 ## 快速开始
 

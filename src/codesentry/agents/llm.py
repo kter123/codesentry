@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextvars
+import re
 import time
 from typing import Any
 
@@ -52,6 +53,13 @@ def current_cost_delta() -> float:
 
 def _error_text(exc: Exception) -> str:
     return str(exc)
+
+
+_SECRET_RE = re.compile(r"(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-]{6,})")
+
+
+def _mask_secrets(text: str) -> str:
+    return _SECRET_RE.sub(lambda m: m.group(1)[:3] + "***", text)
 
 
 def _classify(exc: Exception) -> str:
@@ -127,6 +135,7 @@ class LLMClient:
         self.tokens_used = 0
         self.last_meta: dict[str, Any] = {}
         self._fallback: LLMClient | None = None
+        self._pool: list[LLMClient] = []
         self._transport = transport
         self.record_usage = record_usage
 
@@ -141,7 +150,7 @@ class LLMClient:
 
     # ---- 构造 ----
     @classmethod
-    def from_config(cls) -> LLMClient:
+    def from_config(cls, *, agent: str = "default", scan_id: int = 0) -> LLMClient:
         from codesentry.config import get_settings
 
         s = get_settings()
@@ -151,6 +160,8 @@ class LLMClient:
             fast_model=s.fast_model,
             deep_model=s.deep_model,
             temperature=s.temperature,
+            agent=agent,
+            scan_id=scan_id,
         )
 
     @classmethod
@@ -208,15 +219,37 @@ class LLMClient:
                     from codesentry.control.profiles import get_profile
 
                     fb = get_profile(int(fid))
-                    if fb is not None and fb.enabled:
-                        client._fallback = cls.from_profile(
-                            fb,
-                            session_id=session_id or f"scan-{scan_id}-{agent}-{fb.id}",
-                            agent=agent,
-                            scan_id=scan_id,
-                            timeout_s=timeout_s,
-                            temperature=temperature,
-                        )
+                    if fb is not None and fb.enabled and fb.id != profile.id:
+                        try:
+                            client._pool.append(cls.from_profile(
+                                fb,
+                                session_id=session_id or f"scan-{scan_id}-{agent}-{fb.id}",
+                                agent=agent,
+                                scan_id=scan_id,
+                                timeout_s=timeout_s,
+                                temperature=temperature,
+                            ))
+                        except Exception:  # noqa: BLE001, S110 - 单个备用不可用不阻塞
+                            pass
+                try:
+                    from codesentry.control.llm_pool import chain_profiles
+
+                    for candidate in chain_profiles(profile.id)[1:]:
+                        if any(c.profile_id == candidate.id for c in [client, *client._pool]):
+                            continue
+                        try:
+                            client._pool.append(cls.from_profile(
+                                candidate,
+                                session_id=session_id or f"scan-{scan_id}-{agent}-{candidate.id}",
+                                agent=agent,
+                                scan_id=scan_id,
+                                timeout_s=timeout_s,
+                                temperature=temperature,
+                            ))
+                        except Exception:  # noqa: BLE001, S112 - 单个备用不可用则跳过
+                            continue
+                except Exception:  # noqa: BLE001, S110
+                    pass
                 return client
             except Exception as exc:  # noqa: BLE001 - Profile 不可用时继续尝试 .env
                 try:
@@ -239,12 +272,27 @@ class LLMClient:
 
     # ---- 调用 ----
     def complete(self, system: str, user: str, model_role: str = "deep") -> str:
-        try:
-            return self._complete_inner(system, user, model_role=model_role)
-        except LLMError:
-            if self._fallback is not None:
-                return self._fallback.complete(system, user, model_role=model_role)
-            raise
+        from codesentry.control import llm_pool
+
+        errors: list[Exception] = []
+        for client in [self, *self._pool]:
+            profile_id = getattr(client, "profile_id", None)
+            if profile_id and llm_pool.is_open(int(profile_id)):
+                continue
+            try:
+                text = client._complete_inner(system, user, model_role=model_role)
+                if profile_id:
+                    llm_pool.record_success(int(profile_id))
+                return text
+            except LLMError as exc:
+                if profile_id:
+                    llm_pool.record_failure(int(profile_id), str(exc))
+                errors.append(exc)
+        if self._fallback is not None:
+            return self._fallback.complete(system, user, model_role=model_role)
+        if errors:
+            raise errors[-1]
+        raise LLMError("所有 LLM 配置均不可用（熔断冷却中）")
 
     def _complete_inner(self, system: str, user: str, model_role: str = "deep") -> str:
         model = self._normalize_model(self.deep_model if model_role == "deep" else self.fast_model)
@@ -263,6 +311,7 @@ class LLMClient:
                     text, reasoning, pt, ct = self._call_openai(model, system, user)
                 latency_ms = int((time.monotonic() - started) * 1000)
                 self._record(model, pt, ct, latency_ms, ok=True)
+                self._log_call(model, system, user, text, pt, ct, latency_ms, ok=True)
                 self.last_meta = {
                     "model": model,
                     "protocol": protocol,
@@ -280,12 +329,15 @@ class LLMClient:
                 latency_ms = int((time.monotonic() - started) * 1000)
                 if kind == "missing_session":
                     self._record(model, 0, 0, latency_ms, ok=False, error="missing_session")
+                    self._log_call(model, system, user, "", 0, 0, latency_ms, False, "missing_session")
                     raise LLMConfigError(
                         "Provider 要求 x-opencode-session 请求头，请检查 Profile 的 extra_headers"
                     ) from exc
                 if kind == "config":
                     self._record(model, 0, 0, latency_ms, ok=False,
                                  error=f"config: {_error_text(exc)[:200]}")
+                    self._log_call(model, system, user, "", 0, 0, latency_ms, False,
+                                   f"config: {_error_text(exc)[:200]}")
                     raise LLMConfigError(f"Provider 配置/请求错误：{_error_text(exc)[:200]}") from exc
                 if kind == "protocol":
                     alt = _ANTHROPIC if protocol == _OPENAI else _OPENAI
@@ -294,10 +346,14 @@ class LLMClient:
                         continue
                     self._record(model, 0, 0, latency_ms, ok=False,
                                  error=f"protocol: {_error_text(exc)[:200]}")
+                    self._log_call(model, system, user, "", 0, 0, latency_ms, False,
+                                   f"protocol: {_error_text(exc)[:200]}")
                     raise LLMProtocolError(f"模型 {model} 不支持当前协议：{_error_text(exc)[:200]}") from exc
                 if kind == "unavailable":
                     self._record(model, 0, 0, latency_ms, ok=False,
                                  error=f"unavailable: {_error_text(exc)[:200]}")
+                    self._log_call(model, system, user, "", 0, 0, latency_ms, False,
+                                   f"unavailable: {_error_text(exc)[:200]}")
                     raise LLMUnavailableError(f"模型 {model} 当前不可用：{_error_text(exc)[:200]}") from exc
                 if attempt < self.retries - 1:
                     time.sleep(delay)
@@ -305,6 +361,8 @@ class LLMClient:
 
         self._record(model, 0, 0, 0, ok=False,
                      error=f"retry_exhausted: {_error_text(last_err or Exception('unknown'))[:200]}")
+        self._log_call(model, system, user, "", 0, 0, 0, False,
+                       f"retry_exhausted: {_error_text(last_err or Exception('unknown'))[:200]}")
         raise LLMError(f"LLM {self.retries} 次重试后仍失败: {last_err}") from last_err
 
     def _call_openai(self, model: str, system: str, user: str) -> tuple[str, str, int, int]:
@@ -396,6 +454,32 @@ class LLMClient:
                 error=error,
             )
         except Exception:  # noqa: BLE001, S110 - 台账失败不阻塞
+            pass
+
+    def _log_call(self, model: str, system: str, user: str, response: str, pt: int, ct: int,
+                  latency_ms: int, ok: bool, error: str = "") -> None:
+        if not self.record_usage:
+            return
+        try:
+            from codesentry.config import get_settings
+
+            if not get_settings().record_llm_calls:
+                return
+            from codesentry.db.pool import get_conn
+
+            request = f"system: {system[:800]}\nuser: {user[:1200]}"
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO llm_calls (scan_id, agent, profile_id, model, request_preview,"
+                    " response_preview, prompt_tokens, completion_tokens, cost_usd, latency_ms,"
+                    " ok, error) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (self.scan_id or None, self.agent, self.profile_id,
+                     model, _mask_secrets(request),
+                     _mask_secrets(response[:1200]), pt, ct, self._cost(pt, ct),
+                     latency_ms, ok, error[:300]),
+                )
+                conn.commit()
+        except Exception:  # noqa: BLE001, S110 - 原始记录失败不阻塞
             pass
 
     def probe_models(self) -> list[str]:

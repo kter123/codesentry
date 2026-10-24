@@ -95,11 +95,15 @@ def test_graph_api_python_callgraph():
                    "    return fetch('http://x')\n")
     r = client.post("/api/scans", files={"file": ("proj.zip", buf.getvalue(), "application/zip")}, data={"oss": "true"})
     sid = r.json()["scan_id"]
+    repo = Path(client.get(f"/api/scans/{sid}").json()["repo_path"]).resolve()
+    from codesentry.rag.graph_build import build_graph
+
+    build_graph(str(repo), project=str(repo))
     g = client.get(f"/api/scans/{sid}/graph").json()
-    assert g["mode"] == "callgraph"
+    assert g["mode"] == "graph"
     names = {n["name"] for n in g["nodes"]}
     assert "fetch" in names and "main" in names
-    assert any(e["kind"] == "CALLS" for e in g["edges"])
+    assert any(e["kind"] == "calls" for e in g["edges"])
 
 
 def test_source_slice_and_traversal_guard():

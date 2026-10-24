@@ -98,6 +98,48 @@
             <el-form-item label="允许的引擎（逗号分隔）">
               <el-input v-model="enginesText" placeholder="semgrep, codeql, joern" />
             </el-form-item>
+            <el-form-item label="工具白名单">
+              <el-select
+                v-model="form.tools_allow"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="留空 = 按角色默认（全部可用工具）"
+                style="width: 100%"
+              >
+                <el-option v-for="tool in toolOptions" :key="tool" :label="tool" :value="tool" />
+              </el-select>
+              <div class="muted" style="font-size: 12px">
+                留空表示按角色默认；选择后仅这些工具可被该 Agent 调用。
+              </div>
+            </el-form-item>
+            <el-form-item label="技能白名单">
+              <el-select
+                v-model="form.skills_allow"
+                multiple
+                filterable
+                clearable
+                placeholder="留空 = 使用全部已分配技能"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="skill in allSkills"
+                  :key="skill.name"
+                  :label="skill.name"
+                  :value="skill.name"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="收尾 Prompt（可选）">
+              <el-input
+                v-model="form.wrapup_prompt"
+                class="code-input"
+                type="textarea"
+                :rows="3"
+                placeholder="超时/收尾时追加的指令，例如：先写回已确认 fact 再结束。"
+              />
+            </el-form-item>
             <el-form-item label="Prompt A/B（JSON）">
               <el-input
                 v-model="abText"
@@ -326,8 +368,14 @@ const temperature = ref<number | null>(null)
 const promptInfo = ref<PromptInfo | null>(null)
 const detailWarnings = ref<string[]>([])
 const skills = ref<SkillItem[]>([])
+const allSkills = ref<Array<{ name: string; description?: string }>>([])
 const stats = ref<AgentStats | null>(null)
 const profiles = ref<LlmProfile[]>([])
+
+const toolOptions = [
+  'read_source', 'search_code', 'read_evidence',
+  'graph_search', 'graph_node', 'graph_neighbors', 'graph_paths', 'graph_entrypoints',
+]
 
 const dryRunVisible = ref(false)
 const dryRunResult = ref<Record<string, unknown> | null>(null)
@@ -341,6 +389,9 @@ function applyConfig(config: AgentConfig): void {
     ...config,
     capabilities: { ...(config.capabilities || {}) },
     budget_override: { ...(config.budget_override || {}) },
+    tools_allow: [...(config.tools_allow || [])],
+    skills_allow: [...(config.skills_allow || [])],
+    wrapup_prompt: config.wrapup_prompt || '',
   } as AgentForm
   enginesText.value = (config.capabilities?.engines || []).join(', ')
   temperature.value =
@@ -362,12 +413,13 @@ async function load(): Promise<void> {
   loadError.value = ''
   saveError.value = ''
   const name = agentName.value
-  const [detailRes, promptRes, skillsRes, statsRes, profilesRes] = await Promise.allSettled([
+  const [detailRes, promptRes, skillsRes, statsRes, profilesRes, allSkillsRes] = await Promise.allSettled([
     api.get<AgentDetailResponse>(`/api/agents/${name}`),
     api.get<PromptInfo & { agent?: string }>(`/api/agents/${name}/prompt`),
     api.get<{ skills?: SkillItem[] }>(`/api/agents/${name}/skills`),
     api.get<AgentStats>(`/api/agents/${name}/stats`),
     api.get<{ profiles?: LlmProfile[] }>('/api/llm-profiles'),
+    api.get<{ skills?: Array<{ name: string; description?: string }> }>('/api/skills'),
   ])
 
   if (detailRes.status === 'fulfilled') {
@@ -385,6 +437,7 @@ async function load(): Promise<void> {
   }
 
   if (skillsRes.status === 'fulfilled') skills.value = skillsRes.value?.skills ?? []
+  if (allSkillsRes.status === 'fulfilled') allSkills.value = allSkillsRes.value?.skills ?? []
   if (statsRes.status === 'fulfilled') stats.value = statsRes.value
   if (profilesRes.status === 'fulfilled') profiles.value = profilesRes.value?.profiles ?? []
 
@@ -438,6 +491,9 @@ async function save(): Promise<void> {
     temperature_override: temperature.value,
     budget_override: budget,
     ab_json: ab,
+    tools_allow: config.tools_allow || [],
+    skills_allow: config.skills_allow || [],
+    wrapup_prompt: config.wrapup_prompt || '',
   }
 
   saving.value = true

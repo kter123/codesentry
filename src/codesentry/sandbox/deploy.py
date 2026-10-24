@@ -33,6 +33,22 @@ RECIPES: dict[str, dict] = {
             "if npm run | grep -q start; then npm start; else node server.js; fi'"
         ),
     },
+    "maven": {
+        "image": "maven:3.9-eclipse-temurin-8",
+        "port": 8080,
+        "command": (
+            "sh -lc 'mvn -q -DskipTests package && "
+            "exec java -jar $(ls target/*.jar | head -1)'"
+        ),
+    },
+    "gradle": {
+        "image": "gradle:8-jdk17",
+        "port": 8080,
+        "command": (
+            "sh -lc 'gradle bootJar --no-daemon -q && "
+            "exec java -jar $(ls build/libs/*.jar | head -1)'"
+        ),
+    },
 }
 
 MARKERS = {
@@ -73,6 +89,10 @@ def resolve_project_root(repo: str) -> Path:
 def detect_recipe(repo: str) -> str | None:
     p = resolve_project_root(repo)
     names = {f.name for f in p.iterdir() if f.is_file()} if p.exists() else set()
+    if "pom.xml" in names:
+        return "maven"
+    if "build.gradle" in names or "build.gradle.kts" in names:
+        return "gradle"
     if "requirements.txt" in names or any(n.endswith(".py") for n in names):
         return "python"
     if "composer.json" in names or any(n.endswith(".php") for n in names):
@@ -82,11 +102,31 @@ def detect_recipe(repo: str) -> str | None:
     return None
 
 
+def find_dockerfile(root: Path) -> Path | None:
+    """根目录优先，其次常见子目录，最后在 4 层内递归查找。"""
+    preferred = [
+        root / "Dockerfile",
+        root / "docker" / "Dockerfile",
+        root / "src" / "main" / "docker" / "Dockerfile",
+        root / "dockerfiles" / "Dockerfile",
+    ]
+    for candidate in preferred:
+        if candidate.is_file():
+            return candidate
+    try:
+        for candidate in root.rglob("Dockerfile"):
+            if candidate.is_file() and len(candidate.relative_to(root).parts) <= 4:
+                return candidate
+    except OSError:
+        pass
+    return None
+
+
 def detect_port(root: Path, default: int) -> int:
     """Dockerfile EXPOSE / app.py 常见端口；失败回退 default。"""
     try:
-        df = root / "Dockerfile"
-        if df.is_file():
+        df = find_dockerfile(root)
+        if df is not None:
             m = re.search(r"^\s*EXPOSE\s+(\d{2,5})", df.read_text(errors="replace"), re.MULTILINE)
             if m:
                 return int(m.group(1))
@@ -104,6 +144,44 @@ def detect_port(root: Path, default: int) -> int:
     return default
 
 
+def local_java_image() -> str | None:
+    """优先复用本机已有 Java/Maven 镜像，避免外部 registry 不可达。"""
+    try:
+        import docker
+
+        client = docker.from_env(timeout=15)
+        tags = [tag for image in client.images.list() for tag in (image.tags or [])]
+        client.close()
+    except Exception:  # noqa: BLE001
+        return None
+    scored = []
+    for tag in tags:
+        low = tag.lower()
+        if "squid" in low:
+            continue
+        score = 0
+        if "maven" in low:
+            score += 3
+        if any(k in low for k in ("openjdk", "temurin", "jdk")):
+            score += 3
+        if "8" in low or "java8" in low:
+            score += 2
+        if score >= 5:
+            scored.append((score, tag))
+    return max(scored)[1] if scored else None
+
+
+def choose_java_image(explicit: str = "", *, allow_remote: bool = False) -> str | None:
+    if explicit:
+        return explicit
+    local = local_java_image()
+    if local:
+        return local
+    if allow_remote:
+        return "maven:3.9-eclipse-temurin-8"
+    return None
+
+
 class DockerDeployer:
     def __init__(self, scan_id: int, repo: str, *, poc_run: str = "off",
                  timeout_s: int = 120, mem_mb: int = 512, cpu: float = 1.0,
@@ -111,7 +189,10 @@ class DockerDeployer:
                  internal_network: bool | None = None,
                  network_mode: str | None = None,
                  default_port: int = 8080,
-                 workspace_root: str | Path | None = None) -> None:
+                 workspace_root: str | Path | None = None,
+                 java_image: str = "",
+                 maven_image: str = "",
+                 allow_remote_images: bool = False) -> None:
         self.scan_id = int(scan_id)
         self.repo = repo
         self.poc_run = poc_run
@@ -119,6 +200,9 @@ class DockerDeployer:
         self.mem_mb = int(mem_mb)
         self.cpu = float(cpu)
         self.images = dict(images or {})
+        self.java_image = java_image
+        self.maven_image = maven_image
+        self.allow_remote_images = allow_remote_images
         if network_mode is not None:
             self.internal_network = network_mode == "internal"
         else:
@@ -150,10 +234,10 @@ class DockerDeployer:
         )
         return self.workspace
 
-    def _build_image(self, client, root: Path) -> tuple[str, str]:
+    def _build_image(self, client, root: Path, dockerfile: str = "Dockerfile") -> tuple[str, str]:
         tag = f"codesentry-target-{self.scan_id}:latest"
         image, logs = client.images.build(
-            path=str(root), dockerfile="Dockerfile", tag=tag, rm=True,
+            path=str(root), dockerfile=dockerfile, tag=tag, rm=True,
             timeout=max(180, self.timeout_s + 90),
         )
         tail = []
@@ -172,16 +256,24 @@ class DockerDeployer:
             return DeployResult("disabled", f"Docker 不可用：{str(e)[:200]}")
 
         build_log = ""
-        dockerfile = root / "Dockerfile"
-        use_dockerfile = dockerfile.is_file()
+        df = find_dockerfile(root)
+        detected = detect_recipe(str(root))
+        use_dockerfile = df is not None
+        if use_dockerfile and df is not None and detected in ("maven", "gradle"):
+            text = df.read_text(errors="replace").lower()
+            need_build = "mvn" in text or "gradle" in text or "multi-stage" in text
+            if not need_build:
+                # Dockerfile 只 ADD 预构建产物，直接构建会失败；改用语言配方先构建
+                use_dockerfile = False
         recipe_name: str | None
         command: str | None
         entrypoint: str | None
         volumes: dict | None
         working_dir: str | None
-        if use_dockerfile:
+        if use_dockerfile and df is not None:
             try:
-                image, build_log = self._build_image(client, root)
+                rel = str(df.relative_to(root))
+                image, build_log = self._build_image(client, root, rel)
             except Exception as e:  # noqa: BLE001
                 return DeployResult("disabled", f"Dockerfile 构建失败：{str(e)[:300]}")
             command = None
@@ -191,11 +283,17 @@ class DockerDeployer:
             working_dir = None
             recipe_name = "dockerfile"
         else:
-            recipe_name = detect_recipe(str(root))
+            recipe_name = detected
             if recipe_name is None:
                 return DeployResult("disabled", f"未识别部署方式（Dockerfile/语言配方）：{root}")
-            recipe = RECIPES[recipe_name]
+            recipe = RECIPES.get(recipe_name)
+            if recipe is None:
+                return DeployResult("disabled", f"未支持的语言配方：{recipe_name}")
             image = self.images.get(recipe_name) or recipe["image"]
+            if recipe_name in ("maven", "gradle"):
+                image = (self.maven_image or self.java_image
+                         or choose_java_image("", allow_remote=self.allow_remote_images)
+                         or image)
             command = recipe["command"]
             entrypoint = ""
             port = detect_port(root, recipe["port"])
@@ -369,6 +467,9 @@ def run_deploy(state: dict) -> dict:
         network_mode=settings.deploy_network_mode,
         default_port=settings.deploy_port,
         workspace_root=Path(settings.work_dir) / "deploy",
+        java_image=settings.deploy_java_image,
+        maven_image=settings.deploy_maven_image,
+        allow_remote_images=settings.deploy_image_allow_remote,
     )
     try:
         result = deployer.deploy()

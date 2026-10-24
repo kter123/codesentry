@@ -128,7 +128,7 @@ def test_stub_nodes_with_only_state_still_compile():
         poc_agent=lambda s: {"poc_results": {}},
         report_agent_fn=lambda s: {"phase": "done"},
     )
-    final = g.invoke(new_state("/r", OSS=False), config={"recursion_limit": 10})
+    final = g.invoke(new_state("/r", OSS=False), config={"recursion_limit": 20})
     assert final["phase"] == "done"
 
 
@@ -153,7 +153,7 @@ def test_artifacts_written_per_node(tmp_path):
             checkpointer=None,
             scan_id_holder={"scan_id": sid, "budget": None},
         )
-        g.invoke(new_state("/tmp/lg", OSS=False, scan_id=sid), config={"recursion_limit": 10})
+        g.invoke(new_state("/tmp/lg", OSS=False, scan_id=sid), config={"recursion_limit": 20})
         with get_conn() as c, c.cursor() as cur:
             cur.execute("SELECT node FROM agent_artifacts WHERE scan_id=%s ORDER BY seq", (sid,))
             nodes = [r[0] for r in cur.fetchall()]

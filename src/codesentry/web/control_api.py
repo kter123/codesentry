@@ -181,6 +181,43 @@ async def probe_llm_profile(profile_id: int, limit: int = 5) -> dict:
     return await run_in_threadpool(probe_models, profile_id, limit=limit)
 
 
+@app.get("/api/llm-profiles/health")
+async def llm_health() -> dict:
+    from codesentry.control.llm_pool import health_snapshot
+
+    return {"profiles": health_snapshot()}
+
+
+@app.post("/api/llm-profiles/{profile_id}/recover")
+async def llm_recover(profile_id: int) -> dict:
+    from codesentry.control.llm_pool import reset
+
+    reset(profile_id)
+    return {"ok": True, "profile_id": profile_id}
+
+
+@app.get("/api/llm-calls")
+async def llm_calls(profile_id: int | None = None, limit: int = 50) -> dict:
+    from codesentry.db.pool import get_conn
+
+    sql = ("SELECT id, scan_id, agent, profile_id, model, request_preview, response_preview,"
+           " prompt_tokens, completion_tokens, cost_usd, latency_ms, ok, error, created_at"
+           " FROM llm_calls")
+    params: list = []
+    if profile_id is not None:
+        sql += " WHERE profile_id=%s"
+        params.append(int(profile_id))
+    sql += " ORDER BY id DESC LIMIT %s"
+    params.append(max(1, min(int(limit), 200)))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    keys = ["id", "scan_id", "agent", "profile_id", "model", "request_preview",
+            "response_preview", "prompt_tokens", "completion_tokens", "cost_usd",
+            "latency_ms", "ok", "error", "created_at"]
+    return {"calls": [dict(zip(keys, (*(r[:-1]), str(r[-1])))) for r in rows]}
+
+
 class AgentPatch(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -194,6 +231,9 @@ class AgentPatch(BaseModel):
     temperature_override: float | None = None
     budget_override: dict | None = None
     ab_json: dict | None = None
+    tools_allow: list | None = None
+    skills_allow: list | None = None
+    wrapup_prompt: str | None = None
 
 
 @app.get("/api/agents/{name}")
@@ -408,6 +448,25 @@ async def lint_prompt(payload: LintPayload) -> dict:
     from codesentry.control.prompts import lint
 
     return lint(payload.body)
+
+
+class PromptPreviewPayload(BaseModel):
+    body: str | None = None
+    variables: dict = {}
+
+
+@app.get("/api/prompts/{name}/vars")
+async def prompt_vars(name: str) -> dict:
+    from codesentry.agents.prompts import prompt_vars as _vars
+
+    return {"agent": name, "variables": _vars(name)}
+
+
+@app.post("/api/prompts/{name}/preview")
+async def preview_prompt(name: str, payload: PromptPreviewPayload) -> dict:
+    from codesentry.control.prompts import preview
+
+    return preview(name, payload.body, payload.variables)
 
 
 class PreviewPayload(BaseModel):
@@ -625,6 +684,21 @@ class AskPayload(BaseModel):
     scan_id: int | None = None
 
 
+class CopilotPayload(BaseModel):
+    agent: str
+    version: int | None = None
+
+
+@app.post("/api/assist/copilot")
+async def assist_copilot(payload: CopilotPayload) -> dict:
+    from codesentry.control.assist import copilot
+
+    try:
+        return await run_in_threadpool(copilot, payload.agent, payload.version)
+    except Exception as e:
+        raise HTTPException(503, f"Copilot 不可用：{str(e)[:200]}") from e
+
+
 class KbSearchPayload(BaseModel):
     query: str
     top_k: int = 5
@@ -661,6 +735,44 @@ async def kb_import(payload: KbImportPayload) -> dict:
     if not ok:
         raise HTTPException(400, "导入失败（内容为空或 DB 不可用）")
     return {"ok": True, "source": payload.source}
+
+
+class KbPreviewPayload(BaseModel):
+    content: str
+    size: int = 800
+
+
+class KbRebuildPayload(BaseModel):
+    source: str = ""
+
+
+@app.get("/api/kb/chunks")
+async def kb_chunks(source: str = "", limit: int = 50) -> dict:
+    from codesentry.rag.kb_ops import list_chunks
+
+    return {"chunks": await run_in_threadpool(list_chunks, source, limit)}
+
+
+@app.post("/api/kb/preview")
+async def kb_preview(payload: KbPreviewPayload) -> dict:
+    from codesentry.rag.kb_ops import preview_chunks
+
+    chunks = await run_in_threadpool(preview_chunks, payload.content, payload.size)
+    return {"chunks": chunks, "count": len(chunks)}
+
+
+@app.post("/api/kb/rebuild")
+async def kb_rebuild(payload: KbRebuildPayload) -> dict:
+    from codesentry.rag.kb_ops import rebuild
+
+    return await run_in_threadpool(rebuild, payload.source)
+
+
+@app.delete("/api/kb/source")
+async def kb_delete_source(source: str) -> dict:
+    from codesentry.rag.kb_ops import delete_source
+
+    return {"ok": True, "deleted": await run_in_threadpool(delete_source, source)}
 
 
 class CommentPayload(BaseModel):

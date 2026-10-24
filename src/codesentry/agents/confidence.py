@@ -27,7 +27,8 @@ def evidence_score(evidence: dict | None, *, has_chain: bool = False) -> float:
     code = evidence.get("code") or []
     kb = evidence.get("kb") or []
     if not code and not kb:
-        return 0.3  # 仅断言，降权
+        # 图路径本身就是证据：有闭合 source→sink 时不能按“仅断言”降权
+        return 0.62 if has_chain or evidence.get("taint_chain") else 0.3
     score = 0.5 + min(0.3, 0.08 * len(code)) + min(0.1, 0.03 * len(kb))
     if has_chain or evidence.get("taint_chain"):
         score += 0.2

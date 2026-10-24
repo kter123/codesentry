@@ -324,3 +324,7 @@ flowchart TD
 | M6.5 Vue3 控制台 | ✅ 完成（17 视图/16 路由、审查链 tab、实时 Agent 事件、finding 工具轨迹/置信度） | web/frontend、src/codesentry/web/static | 静态路由/资产测试；npm build 通过 | 本轮提交 |
 | M6.6 Prompt/编排/CI | 部分完成（Prompt A/B + 自动评测、graph_templates、SARIF/replay、webhook HMAC、工具循环） | doc/2026-10-22-prompt-ab-eval-spec.md | 控制面/评测/工具循环/webhook 测试；编排 UI/对比图待续 | 本轮提交 |
 | M6.7 P1/P2 | 部分完成（AI 助手、知识库统计/检索/导入、审查评论、保留清理、SDK、usage/audit/health） | doc/2026-10-22-platform-extras.md、doc/2026-10-22-ai-assist-spec.md | 多租户/配额、评论 UI、通知渠道待续 | 本轮提交 |
+| G1–G4 图谱核心 | ✅ 完成（2026-10-23） | doc/2026-10-22-graph-core-and-agent-platform-spec.md、doc/2026-10-23-graph-core-implementation.md | kvf-admin 311 文件：5,782 节点/12,087 边/95 接口/21s；六语言抽取器；图查询与图 UI；282 tests 绿 | 未提交 |
+| 路径中心多轮审计 | ✅ 完成（2026-10-24） | doc/2026-10-24-path-centric-audit-{spec,plan,implementation}.md + 两轮 review | kvf：37 路径/20 入口/6 轮/10 findings（run 1164）；4 findings（run 1212）；完整链路 1214 跑通；OpenCode Go 4 轮真实 Agent 测试通过；293 tests 绿 | 未提交 |
+| 引擎 Dataflow 入图 | ✅ 完成（2026-10-24） | doc/2026-10-24-engine-dataflow-graph-{spec,plan,implementation}.md + 两轮 review | Joern calls 364/dataflow 26；kvf endpoint 覆盖 95/95（含 entry-only）、sink 27/112、dataflow 路径 27；本地 bge-m3 1024 维实测入库；299 tests 绿 | 未提交 |
+| M1–M2 管理面 | ✅ 完成（2026-10-23） | 同上 | Prompt 三段式/变量预览；Agent 工具技能白名单；LLM 池熔断/健康/原始调用；前端构建通过 | 未提交 |

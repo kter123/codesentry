@@ -57,3 +57,23 @@ def ask(question: str, scan_id: int | None = None) -> dict:
 
 def ask_json(question: str, scan_id: int | None = None) -> str:
     return json.dumps(ask(question, scan_id), ensure_ascii=False)
+
+
+def copilot(agent: str, version: int | None = None) -> dict:
+    """根据 Prompt 与最近评测指标给出修改建议（不自动应用）。"""
+    from codesentry.agents.llm import LLMClient
+    from codesentry.control.prompts import get_active, get_version, list_evals
+
+    pv = get_version(agent, version) if version is not None else get_active(agent)
+    body = (pv or {}).get("body", "")
+    evals = list_evals(agent, limit=3)
+    prompt = (
+        f"Agent={agent}\n当前 Prompt:\n{body[:8000]}\n\n最近评测:\n"
+        + json.dumps(evals, ensure_ascii=False)
+        + "\n请给出 3-5 条具体、可执行的 Prompt 修改建议；不要重写全文，不要自动应用。"
+    )
+    llm = LLMClient.for_agent(agent)
+    return {"agent": agent, "version": (pv or {}).get("version"),
+            "suggestion": llm.complete(SYSTEM, prompt, model_role="deep"),
+            "evals": evals}
+

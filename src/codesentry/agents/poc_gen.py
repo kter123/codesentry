@@ -26,10 +26,33 @@ POC_VERDICTS = ("verified", "plausible", "false_positive")
 _DEFAULT_SYSTEM = (
     "你是 PoCGenAgent。基于 finding 与证据生成：①利用链路步骤列表（source→传播→sink）；"
     "②可执行的内容——HTTP 类给 curl 命令序列；本地类给 python/注入点调用样例。"
+    "证据里的 graph_chain 是代码图给出的真实调用/污点边，必须优先遵循；"
+    "不得编造图中不存在的调用链。"
     "禁止生成 rm -rf / 反弹 shell / sudo 等 payload。"
     "验证占位符：HTTP 回调使用 {CANARY_URL}，命令回显使用 {CANARY_CMD}，文件副作用使用 {CANARY_FILE}。"
     '只输出 JSON：{"exploit_chain": ["step1", ...], "poc_script": "...", "notes": "备注"}'
 )
+
+
+def _graph_chain(evidence: dict) -> list[str]:
+    graph = evidence.get("graph") or {}
+    nodes = {n.get("key"): n for n in graph.get("nodes") or [] if isinstance(n, dict)}
+    edges = graph.get("edges") or []
+
+    def label(key: str | None) -> str:
+        n = nodes.get(key or "") or {}
+        name = n.get("qualified_name") or n.get("name") or key or "?"
+        return f"{n.get('kind', '?')}:{name}"
+
+    chain = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        kind = edge.get("kind")
+        if kind not in ("taints_to", "calls", "routes_to", "exposes"):
+            continue
+        chain.append(f"{label(edge.get('from'))} -[{kind}]-> {label(edge.get('to'))}")
+    return chain[:20]
 
 
 def check_payload_safety(poc_script: str) -> tuple[bool, str]:
@@ -43,7 +66,11 @@ def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None,
             tools=None, max_iterations: int = 8) -> dict:
     cwe = int(finding.get("cwe") or 0)
     kind = "http" if cwe in HTTP_CWES else "local"
-    user = json.dumps({"finding": finding, "evidence": evidence}, ensure_ascii=False)[:10000]
+    graph_chain = _graph_chain(evidence)
+    user = json.dumps(
+        {"finding": finding, "evidence": evidence, "graph_chain": graph_chain},
+        ensure_ascii=False,
+    )[:12000]
     if system and "poc_script" not in system:
         system = system.rstrip() + "\n\n" + _DEFAULT_SYSTEM
     system = system or _DEFAULT_SYSTEM
@@ -58,21 +85,44 @@ def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None,
             text = llm.complete(system, user, model_role="deep")
             trace = []
         m = re.search(r"\{.*\}", text, re.DOTALL)
+        chain = graph_chain
+        script = ""
+        notes = ""
         if m:
-            d = json.loads(m.group(0))
-            chain = d.get("exploit_chain") or []
-            script = str(d.get("poc_script") or "")
-            safe, reason = check_payload_safety(script)
-            if not safe:
-                return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
-                        "notes": reason, "rejected": True, "tool_trace": trace}
-            return {"exploit_chain": chain, "poc_script": script, "poc_kind": kind,
-                    "notes": d.get("notes", ""), "rejected": False, "tool_trace": trace}
-        return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
-                "notes": "LLM 输出不可解析", "rejected": False, "tool_trace": trace}
+            try:
+                d = json.loads(m.group(0))
+                chain = d.get("exploit_chain") or graph_chain
+                script = str(d.get("poc_script") or "")
+                notes = str(d.get("notes") or "")
+            except json.JSONDecodeError:
+                script = ""
+        if not script:
+            fence = re.search(r"```(?:python|bash|sh)?\s*\n(.*?)```", text, re.DOTALL)
+            if fence:
+                script = fence.group(1).strip()
+                notes = notes or "从代码块提取 PoC"
+        if not script:
+            return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
+                    "notes": notes or "LLM 输出中没有可用 PoC", "rejected": False,
+                    "tool_trace": trace}
+        safe, reason = check_payload_safety(script)
+        if not safe:
+            return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
+                    "notes": reason, "rejected": True, "tool_trace": trace}
+        return {"exploit_chain": chain, "poc_script": script, "poc_kind": kind,
+                "notes": notes, "rejected": False, "tool_trace": trace}
     except Exception as e:  # noqa: BLE001 - 生成失败 → finding 保留 + plausible + 原因（§10）
         return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
                 "notes": f"生成失败：{str(e)[:80]}", "rejected": False, "tool_trace": []}
+
+
+def _poc_ext(script: str) -> str:
+    text = script.lstrip()
+    if text.startswith("#!") and ("bash" in text.splitlines()[0] or "sh" in text.splitlines()[0]):
+        return ".sh"
+    if "curl " in text and "import " not in text:
+        return ".sh"
+    return ".py"
 
 
 def execute_poc_local(poc_script: str, work_dir: str, timeout: int = 60) -> dict:
@@ -149,6 +199,9 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
         from codesentry.agents.tools import build_tools
 
         tools = build_tools(state)
+        allow = list(getattr(runtime, "tools_allow", []) or [])
+        if allow:
+            tools = {k: v for k, v in tools.items() if k in allow}
     except Exception:  # noqa: BLE001
         tools = {}
     max_iterations = int(getattr(runtime, "max_iterations", 8) or 8)
@@ -159,9 +212,25 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
         fdict = {k: v for k, v in t.items() if k != "triage"}
         key = f"{fdict.get('rule_id')}@{fdict.get('line')}"
         if mode == "off":
+            gen = gen_poc(
+                llm, fdict, (state.get("evidence") or {}).get(key, {}),
+                system=system, tools=tools, max_iterations=max_iterations,
+            ) if llm else {"exploit_chain": [], "poc_script": "", "poc_kind": "local",
+                           "notes": "no llm", "rejected": False, "tool_trace": []}
+            script = str(gen.get("poc_script") or "")
+            poc_file = ""
+            if script and not gen.get("rejected"):
+                poc_dir = work / "poc"
+                poc_dir.mkdir(parents=True, exist_ok=True)
+                fname = f"poc_{re.sub(r'[^A-Za-z0-9]', '_', key)[:60]}{_poc_ext(script)}"
+                poc_file = str(poc_dir / fname)
+                Path(poc_file).write_text(script, encoding="utf-8")
             poc_results[key] = {
-                "exploit_chain": [], "poc_file": "", "verdict": "plausible",
+                "exploit_chain": gen.get("exploit_chain") or [],
+                "poc_file": poc_file,
+                "verdict": "plausible",
                 "execution_log": "POC_RUN=off（或能力矩阵禁用 poc_exec）— 只生成不执行（D28）",
+                "tool_trace": gen.get("tool_trace", []),
             }
             updated.append({**t, "poc": poc_results[key]})
             continue
@@ -186,7 +255,7 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
             continue
         poc_dir = work / "poc"
         poc_dir.mkdir(parents=True, exist_ok=True)
-        fname = f"poc_{re.sub(r'[^A-Za-z0-9]', '_', key)[:60]}.py"
+        fname = f"poc_{re.sub(r'[^A-Za-z0-9]', '_', key)[:60]}{_poc_ext(script)}"
         poc_file = str(poc_dir / fname)
         Path(poc_file).write_text(script, encoding="utf-8")
         method = "none"

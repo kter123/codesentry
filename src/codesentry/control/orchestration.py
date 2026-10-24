@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-ALLOWED_NODES = {"recon", "scan", "retrieval", "triage", "deploy", "poc_gen", "human_review", "report"}
+ALLOWED_NODES = {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "human_review", "report"}
 REQUIRED_NODES = {"recon", "scan", "report"}
 
 
@@ -41,19 +41,14 @@ def validate(config: dict) -> dict:
             errors.append(f"边引用未知节点：{src}->{dst}")
         if src == dst:
             errors.append(f"不允许自环：{src}")
-        if src == "triage" and dst == "retrieval":
+        if src == "triage" and dst == "audit":
             maximum = int(edge.get("max") or 0)
             if maximum < 1 or maximum > 3:
-                errors.append("triage->retrieval 回边 max 必须在 1..3")
+                errors.append("triage->audit 回边 max 必须在 1..3")
         else:
-            # 只允许 triage -> retrieval 作为回边；其余边不得形成环
+            # 只允许 triage -> audit 作为回边；其余边不得形成环
             if src in ids and dst in ids and ids.index(dst) < ids.index(src):
                 errors.append(f"非法回边：{src}->{dst}")
-    if not errors:
-        edges_set = {(e["from"], e["to"]) for e in edges}
-        for a, b in (("recon", "scan"), ("scan", "retrieval"), ("retrieval", "triage")):
-            if a in ids and b in ids and (a, b) not in edges_set:
-                errors.append(f"缺少主链路边：{a}->{b}")
     return {"ok": not errors, "errors": errors, "nodes": ids,
             "settings": config.get("settings") or {}}
 
