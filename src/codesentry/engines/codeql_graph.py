@@ -32,12 +32,17 @@ def parse_codeql_flows(doc: dict, repo: str) -> list[dict]:
                         loc = (item or {}).get("location") or {}
                         physical = loc.get("physicalLocation") or {}
                         uri = (physical.get("artifactLocation") or {}).get("uri", "")
-                        line = ((physical.get("region") or {}).get("startLine") or 0)
+                        region = physical.get("region") or {}
+                        line = region.get("startLine") or 0
+                        column = region.get("startColumn") or 0
                         path = normalize_sarif_uri(uri, repo)
                         if path and line:
-                            locations.append({"path": path, "line": int(line)})
+                            locations.append({"path": path, "line": int(line),
+                                              "column": int(column)})
                     for src, dst in itertools.pairwise(locations):
-                        if (src["path"], src["line"]) == (dst["path"], dst["line"]):
+                        if (src["path"], src["line"], src.get("column")) == (
+                            dst["path"], dst["line"], dst.get("column")
+                        ):
                             continue
                         edges.append({"src_path": src["path"], "src_line": src["line"],
                                       "dst_path": dst["path"], "dst_line": dst["line"]})

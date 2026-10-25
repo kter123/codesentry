@@ -488,6 +488,11 @@ SETTING_KEYS = {
     "codeql_build_command": "codeql",
     "codeql_timeout_s": "codeql",
     "codeql_db_cache": "codeql",
+    "codeql_auto_install": "codeql",
+    "codeql_version": "codeql",
+    "codeql_license_ack": "codeql",
+    "codeql_install_dir": "codeql",
+    "codeql_sha256": "codeql",
     "smtp_host": "notifications",
     "smtp_port": "notifications",
     "smtp_user": "notifications",
@@ -495,6 +500,8 @@ SETTING_KEYS = {
     "smtp_from": "notifications",
     "smtp_to": "notifications",
     "smtp_tls": "notifications",
+    "poc_remote_enabled": "poc",
+    "poc_remote_allow_private": "poc",
 }
 
 
@@ -508,7 +515,7 @@ def _mask(key: str, val: str) -> str:
 
 @app.get("/api/settings/{group}")
 async def get_settings_group(group: str) -> dict:
-    if group not in ("llm", "embedding", "codeql", "notifications"):
+    if group not in ("llm", "embedding", "codeql", "notifications", "poc"):
         raise HTTPException(404)
     out: dict[str, str] = {}
     for key, g in SETTING_KEYS.items():
@@ -519,6 +526,8 @@ async def get_settings_group(group: str) -> dict:
         if group == "notifications" and g != "notifications":
             continue
         if group == "codeql" and g != "codeql":
+            continue
+        if group == "poc" and g != "poc":
             continue
         val = _read_setting(key)
         out[key] = _mask(key, val)
@@ -559,6 +568,11 @@ def _read_setting(key: str) -> str:
         "codeql_build_command": s.codeql_build_command,
         "codeql_timeout_s": str(s.codeql_timeout_s),
         "codeql_db_cache": str(s.codeql_db_cache).lower(),
+        "codeql_auto_install": str(s.codeql_auto_install).lower(),
+        "codeql_version": s.codeql_version,
+        "codeql_license_ack": str(s.codeql_license_ack).lower(),
+        "codeql_install_dir": s.codeql_install_dir,
+        "codeql_sha256": s.codeql_sha256,
         "smtp_host": os.environ.get("CODESENTRY_SMTP_HOST", ""),
         "smtp_port": os.environ.get("CODESENTRY_SMTP_PORT", "587"),
         "smtp_user": os.environ.get("CODESENTRY_SMTP_USER", ""),
@@ -566,6 +580,8 @@ def _read_setting(key: str) -> str:
         "smtp_from": os.environ.get("CODESENTRY_SMTP_FROM", ""),
         "smtp_to": os.environ.get("CODESENTRY_SMTP_TO", ""),
         "smtp_tls": os.environ.get("CODESENTRY_SMTP_TLS", "true"),
+        "poc_remote_enabled": str(s.poc_remote_enabled).lower(),
+        "poc_remote_allow_private": str(s.poc_remote_allow_private).lower(),
     }.get(key, "")
 
 
@@ -575,7 +591,7 @@ class SettingsPayload(BaseModel):
 
 @app.put("/api/settings/{group}")
 async def put_settings_group(group: str, payload: SettingsPayload) -> dict:
-    if group not in ("llm", "embedding", "codeql", "notifications"):
+    if group not in ("llm", "embedding", "codeql", "notifications", "poc"):
         raise HTTPException(404)
     for k, v in payload.values.items():
         if k not in SETTING_KEYS or SETTING_KEYS[k] != group:

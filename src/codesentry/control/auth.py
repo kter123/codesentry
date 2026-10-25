@@ -24,9 +24,9 @@ ADMIN_PREFIXES = (
     "/api/llm-profiles", "/api/agents", "/api/prompts", "/api/skills",
     "/api/rules", "/api/settings", "/api/users", "/api/api-tokens", "/api/usage",
     "/api/ops", "/api/webhooks", "/api/config", "/api/projects", "/api/schedules",
-    "/api/agent-presets",
+    "/api/agent-presets", "/api/poc-targets",
 )
-ANALYST_PREFIXES = ("/api/scans", "/api/reviews")
+ANALYST_PREFIXES = ("/api/scans", "/api/reviews", "/api/findings")
 
 
 def _b64e(raw: bytes) -> str:

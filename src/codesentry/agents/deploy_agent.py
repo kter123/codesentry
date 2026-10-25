@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 
 SYSTEM = """你是 CodeSentry 的部署 Agent。你的任务是把上传的源码在 Docker 中跑起来。
 
@@ -17,7 +18,11 @@ SYSTEM = """你是 CodeSentry 的部署 Agent。你的任务是把上传的源�
 5. 用 docker_run 启动并用 probe/health 验证；成功调用 finish。
 
 工具：
-list_files / read_file / inspect / local_images / write_dockerfile / docker_build / docker_run / docker_logs / probe / finish
+list_files / read_file / inspect / local_images / detect_dependencies / ensure_dependency / write_dockerfile / docker_build / docker_run / docker_logs / probe / finish
+
+依赖：若项目需要 MySQL/Redis/PostgreSQL，先 detect_dependencies，再 ensure_dependency；
+依赖会与目标容器在同一 Docker network，并自动注入 MYSQL_HOST/MYSQL_PORT/REDIS_HOST 等 env。
+不要等待人工提供数据库；自行决定并启动依赖，失败就如实 degraded。
 
 约束：
 - 只在 Docker 内构建与运行；不要请求宿主 shell。
@@ -62,6 +67,10 @@ class DeploySession:
         self.notes = ""
         self.plan: dict = {}
         self.build_log = ""
+        self.dependency_env: dict[str, str] = {}
+        self.dependency_results: list[dict] = []
+        self.network = f"codesentry-net-{self.scan_id}"
+        self._dependency_manager: Any = None
         self._prepare()
 
     def _prepare(self) -> None:
@@ -84,6 +93,8 @@ class DeploySession:
             "read_file": self.read_file,
             "inspect": self.inspect,
             "local_images": self.local_images,
+            "detect_dependencies": self.detect_dependencies,
+            "ensure_dependency": self.ensure_dependency,
             "write_dockerfile": self.write_dockerfile,
             "docker_build": self.docker_build,
             "docker_run": self.docker_run,
@@ -146,6 +157,45 @@ class DeploySession:
         except Exception as exc:  # noqa: BLE001
             return f"ERROR: {exc}"
 
+    def detect_dependencies(self) -> str:
+        from codesentry.sandbox.dependencies import DependencyManager
+
+        try:
+            return json.dumps(DependencyManager.detect(self.root), ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR: {exc}"
+
+    def ensure_dependency(self, kind: str) -> str:
+        from codesentry.sandbox.dependencies import DependencyManager
+
+        try:
+            client = self._client()
+            try:
+                client.networks.get(self.network)
+            except Exception:  # noqa: BLE001
+                client.networks.create(
+                    self.network, driver="bridge",
+                    internal=self.settings.deploy_network_mode == "internal",
+                )
+            if self._dependency_manager is None:
+                self._dependency_manager = DependencyManager(
+                    client, self.network, self.scan_id, root=self.root,
+                    timeout_s=int(self.settings.deploy_dependency_timeout_s),
+                    pull_policy=self.settings.deploy_image_pull,
+                    allow_remote=self.settings.deploy_image_allow_remote,
+                    images={
+                        "mysql": self.settings.deploy_dependency_mysql_image,
+                        "redis": self.settings.deploy_dependency_redis_image,
+                        "postgres": self.settings.deploy_dependency_postgres_image,
+                    },
+                )
+            result = self._dependency_manager.ensure(kind)
+            self.dependency_env.update(self._dependency_manager.env)
+            self.dependency_results.append(result)
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            return f"ERROR: {exc}"
+
     def write_dockerfile(self, content: str) -> str:
         text = str(content or "")
         if "FROM " not in text.upper():
@@ -184,6 +234,20 @@ class DeploySession:
             return "ERROR: 尚未成功 docker_build"
         try:
             client = self._client()
+            try:
+                client.networks.get(self.network)
+            except Exception:  # noqa: BLE001
+                client.networks.create(
+                    self.network, driver="bridge",
+                    internal=self.settings.deploy_network_mode == "internal",
+                )
+            if self.settings.deploy_auto_dependencies and self._dependency_manager is None:
+                detected = self.detect_dependencies()
+                try:
+                    for dep in json.loads(detected):
+                        self.ensure_dependency(str(dep))
+                except json.JSONDecodeError:
+                    pass
             if self.container is not None:
                 try:
                     self.container.remove(force=True)
@@ -193,7 +257,9 @@ class DeploySession:
                 self.image,
                 name=f"codesentry-target-{self.scan_id}",
                 detach=True,
+                network=self.network,
                 ports={f"{int(port)}/tcp": ("127.0.0.1", None)},
+                environment=self.dependency_env or None,
                 mem_limit=f"{int(self.settings.deploy_mem_mb)}m",
                 nano_cpus=int(float(self.settings.deploy_cpu) * 1_000_000_000),
                 cap_drop=["ALL"],
@@ -276,6 +342,7 @@ def _plan_fallback(llm, session: DeploySession, build_files: dict,
         "has_dockerfile": (session.build_dir / "Dockerfile").is_file(),
         "local_images": json.loads(session.local_images(60)),
         "java_images": _java_images(session.local_images(60)),
+        "dependencies": session.detect_dependencies(),
         "previous_error": previous_error[-3000:],
     }
     try:
@@ -340,6 +407,7 @@ def run_deploy_agent(state: dict, runtime=None, llm=None) -> dict:
         "build_files": build_files,
         "local_images": json.loads(session.local_images(60)),
         "java_images": _java_images(session.local_images(60)),
+        "dependencies": session.detect_dependencies(),
         "instruction": (
             "你已经看到仓库文件与构建文件。现在必须调用工具执行："
             "若已有可用 Dockerfile 可直接 docker_build；否则先 write_dockerfile。"

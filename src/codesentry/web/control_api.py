@@ -694,6 +694,59 @@ async def import_config(payload: ConfigImportPayload) -> dict:
         raise HTTPException(400, str(e)) from e
 
 
+class PocTargetPayload(BaseModel):
+    name: str
+    base_url: str
+    allowed_hosts: list[str]
+    expires_at: str = ""
+    enabled: bool = True
+
+
+@app.get("/api/poc-targets")
+async def list_poc_targets() -> dict:
+    from codesentry.control.poc_targets import list_targets
+
+    return {"targets": list_targets()}
+
+
+@app.post("/api/poc-targets")
+async def create_poc_target(payload: PocTargetPayload) -> dict:
+    from datetime import datetime
+
+    from codesentry.control.poc_targets import create_target
+
+    expires = None
+    if payload.expires_at:
+        try:
+            expires = datetime.fromisoformat(payload.expires_at)
+        except ValueError as e:
+            raise HTTPException(400, "expires_at 必须是 ISO8601") from e
+    try:
+        return create_target(payload.name, payload.base_url, payload.allowed_hosts,
+                             expires, payload.enabled)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.delete("/api/poc-targets/{target_id}")
+async def delete_poc_target(target_id: int) -> dict:
+    from codesentry.control.poc_targets import delete_target
+
+    if not delete_target(target_id):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.post("/api/poc-targets/{target_id}/probe")
+async def probe_poc_target(target_id: int) -> dict:
+    from codesentry.control.poc_targets import probe_target
+
+    try:
+        return await run_in_threadpool(probe_target, target_id)
+    except ValueError as e:
+        raise HTTPException(403, str(e)) from e
+
+
 class WebhookPayload(BaseModel):
     name: str = ""
     kind: str = "generic"
@@ -1000,6 +1053,65 @@ class CommentPayload(BaseModel):
     author: str = ""
 
 
+@app.post("/api/findings/{finding_id}/fix")
+async def generate_finding_fix(finding_id: int) -> dict:
+    from pathlib import Path
+
+    from codesentry.agents.fix_agent import generate_fix
+    from codesentry.agents.runtime import prepare_agent
+    from codesentry.db.pool import get_conn
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT f.scan_id, f.rule_id, f.cwe, f.severity, f.file, f.line, f.message,"
+            " s.repo_path FROM findings f JOIN scans s ON s.id=f.scan_id WHERE f.id=%s",
+            (int(finding_id),),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "finding not found")
+    scan_id, rule_id, cwe, severity, rel, line, message, repo = row
+    repo_path = Path(str(repo)).resolve()
+    target = (repo_path / str(rel)).resolve()
+    if repo_path not in target.parents and target != repo_path:
+        raise HTTPException(400, "finding file outside repo")
+    try:
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        raise HTTPException(404, f"源码不可读：{e}") from e
+    start = max(1, int(line or 1) - 40)
+    end = min(len(lines), int(line or 1) + 40)
+    source = "\n".join(f"{i}: {lines[i - 1]}" for i in range(start, end + 1))
+    runtime = await run_in_threadpool(prepare_agent, "audit", scan_id=int(scan_id),
+                                      with_llm=True)
+    if runtime is None or runtime.llm is None:
+        raise HTTPException(503, "LLM 未配置，无法生成修复建议")
+    finding = {"rule_id": rule_id, "cwe": cwe, "severity": severity,
+               "file": rel, "line": line, "message": message}
+    try:
+        out = await run_in_threadpool(generate_fix, runtime.llm, finding, source, {})
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE findings SET fix_patch=%s, fix_summary=%s, fix_tests=%s::jsonb"
+            " WHERE id=%s",
+            (out["patch"], out["summary"], __import__("json").dumps(out["tests"]),
+             int(finding_id)),
+        )
+        conn.commit()
+    try:
+        from codesentry.control.audit import audit_write
+
+        audit_write("api", "generate", "finding_fix", str(finding_id), None,
+                    {"summary": out["summary"]})
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return {"finding_id": finding_id, **out}
+
+
 @app.get("/api/scans/{scan_id}/comments")
 async def scan_comments(scan_id: int, finding_id: int | None = None) -> dict:
     from codesentry.control.review_comments import list_comments
@@ -1078,6 +1190,36 @@ async def codeql_status() -> dict:
     from codesentry.control.engine_config import codeql_status as _status
 
     return await run_in_threadpool(_status, "java")
+
+
+class CodeQLInstallPayload(BaseModel):
+    version: str = ""
+    license_ack: bool = False
+    sha256: str = ""
+
+
+@app.get("/api/engines/codeql/install/status")
+async def codeql_install_status() -> dict:
+    from codesentry.config import get_settings
+    from codesentry.control.engine_config import codeql_status
+    from codesentry.control.engine_install import install_dir
+
+    s = get_settings()
+    status = await run_in_threadpool(codeql_status)
+    return {**status, "install_dir": str(install_dir()),
+            "auto_install": s.codeql_auto_install,
+            "license_ack": s.codeql_license_ack,
+            "target_version": s.codeql_version}
+
+
+@app.post("/api/engines/codeql/install")
+async def codeql_install(payload: CodeQLInstallPayload) -> dict:
+    from codesentry.control.engine_install import install_codeql
+
+    return await run_in_threadpool(
+        install_codeql, version=payload.version, license_ack=payload.license_ack,
+        sha256=payload.sha256,
+    )
 
 
 @app.post("/api/engines/codeql/test")

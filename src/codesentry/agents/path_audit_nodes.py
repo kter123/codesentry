@@ -145,8 +145,11 @@ def run_audit_collect(state: dict) -> dict:
             continue
         seen.add(key)
         candidates.append(finding)
+    merged: dict[tuple, dict] = {}
+    for finding in [*(state.get("candidate_findings") or []), *candidates]:
+        merged[(finding.get("rule_id"), finding.get("file"), finding.get("line"))] = finding
     return {
-        "candidate_findings": candidates,
+        "candidate_findings": list(merged.values()),
         "audit_paths": [],
         "audit_round": round_no,
         "audit_batch": batch_no,

@@ -54,6 +54,24 @@ def run_scan_agent(state: dict) -> dict:
         }
     blocked = [n for n in engine_names if not gate.check_engine(n)[0]]
     settings = get_settings()
+    if "codeql" in engine_names and OSS:
+        try:
+            from codesentry.control.engine_config import resolve_codeql_config
+            from codesentry.control.engine_install import _setting, install_codeql
+
+            auto = _setting("codeql_auto_install").lower() in ("1", "true", "yes", "on")
+            ack = _setting("codeql_license_ack").lower() in ("1", "true", "yes", "on")
+            cfg = resolve_codeql_config("java")
+            if auto and ack and not cfg.binary:
+                installed = install_codeql(version=_setting("codeql_version"),
+                                            license_ack=True,
+                                            sha256=_setting("codeql_sha256"))
+                if installed.get("ok"):
+                    import os
+
+                    os.environ["CODESENTRY_CODEQL_BIN"] = str(installed["binary"])
+        except Exception:  # noqa: BLE001, S110 - 自动安装失败降级其他引擎
+            pass
 
     def _semgrep_spec():
         def spec(**_kw):

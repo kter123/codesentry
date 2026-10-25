@@ -198,6 +198,8 @@ class GenericExtractor:
             owner = node.child_by_field_name(self.cfg.method_owner_field)
             if owner is not None:
                 name = text_of(raw, owner).split()[-1]
+        if not name and self.lang in ("javascript", "typescript", "tsx"):
+            name = f"anon@L{node.start_point[0] + 1}"
         if not name:
             self._walk(node, raw, path, result, parent, class_stack)
             return
@@ -299,10 +301,13 @@ class GenericExtractor:
         functions = [n for n in result.nodes if n.kind in ("function", "method")]
 
         def owner(line: int):
-            for fn in functions:
-                if fn.start_line <= line <= fn.end_line:
-                    return fn
-            return None
+            candidates = [
+                fn for fn in functions
+                if fn.start_line <= line + 1 and line <= fn.end_line
+            ]
+            if not candidates:
+                return None
+            return min(candidates, key=lambda fn: abs(fn.start_line - line))
 
         for pattern, method_group, route_group, default_method in _ROUTE_PATTERNS[self.lang]:
             for match in pattern.finditer(source):

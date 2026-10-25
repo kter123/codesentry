@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     path_min_score: float = 0.2
     path_lease_s: int = 900
     scheduler_enabled: bool = True
+    poc_remote_enabled: bool = False
+    poc_remote_allow_private: bool = False
     scheduler_interval_s: int = 30
 
     # llm (D5, D14)
@@ -71,6 +73,11 @@ class Settings(BaseSettings):
     deploy_java_image: str = ""
     deploy_maven_image: str = ""
     deploy_image_allow_remote: bool = False
+    deploy_auto_dependencies: bool = True
+    deploy_dependency_mysql_image: str = "mysql:8.0"
+    deploy_dependency_redis_image: str = "redis:7-alpine"
+    deploy_dependency_postgres_image: str = "postgres:16-alpine"
+    deploy_dependency_timeout_s: int = 90
 
     # web (D36 修订：默认仅回环；绑定外部地址需显式配置认证)
     web_bind: str = "127.0.0.1"
@@ -88,6 +95,11 @@ class Settings(BaseSettings):
     codeql_build_command: str = ""
     codeql_timeout_s: int = 1800
     codeql_db_cache: bool = True
+    codeql_auto_install: bool = False
+    codeql_version: str = "2.27.2"
+    codeql_license_ack: bool = False
+    codeql_install_dir: str = ""
+    codeql_sha256: str = ""
     joern_bin: str = "joern"
     semgrep_bin: str = "semgrep"
 

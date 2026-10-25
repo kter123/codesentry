@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -238,7 +240,10 @@ class DockerDeployer:
                  java_image: str = "",
                  maven_image: str = "",
                  allow_remote_images: bool = False,
-                 image_pull: str = "missing") -> None:
+                 image_pull: str = "missing",
+                 auto_dependencies: bool = True,
+                 dependency_images: dict[str, str] | None = None,
+                 dependency_timeout_s: int = 90) -> None:
         self.scan_id = int(scan_id)
         self.repo = repo
         self.poc_run = poc_run
@@ -250,6 +255,10 @@ class DockerDeployer:
         self.maven_image = maven_image
         self.allow_remote_images = allow_remote_images
         self.image_pull = image_pull if image_pull in ("never", "missing", "always") else "missing"
+        self.auto_dependencies = bool(auto_dependencies)
+        self.dependency_images = dict(dependency_images or {})
+        self.dependency_timeout_s = int(dependency_timeout_s)
+        self._dependencies: Any = None
         if network_mode is not None:
             self.internal_network = network_mode == "internal"
         else:
@@ -369,6 +378,19 @@ class DockerDeployer:
                 self._network = client.networks.create(
                     self.network_name, driver="bridge", internal=self.internal_network
                 )
+            dependency_env: dict[str, str] = {}
+            dependency_results: list[dict] = []
+            if self.auto_dependencies:
+                from codesentry.sandbox.dependencies import DependencyManager
+
+                self._dependencies = DependencyManager(
+                    client, self.network_name, self.scan_id, root=root,
+                    timeout_s=self.dependency_timeout_s, pull_policy=self.image_pull,
+                    allow_remote=self.allow_remote_images,
+                    images=self.dependency_images,
+                )
+                dependency_results = self._dependencies.ensure_all()
+                dependency_env = dict(self._dependencies.env)
             publish = None if self.internal_network else {f"{port}/tcp": ("127.0.0.1", None)}
             kwargs = {
                 "name": self.container_name,
@@ -390,6 +412,8 @@ class DockerDeployer:
                 kwargs["volumes"] = volumes
             if working_dir:
                 kwargs["working_dir"] = working_dir
+            if dependency_env:
+                kwargs["environment"] = dependency_env
             container = client.containers.run(image, **kwargs)
             self._container = container
             container.reload()
@@ -408,7 +432,12 @@ class DockerDeployer:
             log = f"{build_log}\n" if build_log else ""
             log += f"容器 {self.container_name}（{recipe_name}）{status}，target={target_url or '—'}"
             runtime_deps = detect_runtime_dependencies(root)
-            if runtime_deps and status != "ready":
+            if self._dependencies is not None:
+                log += "；依赖：" + json.dumps(dependency_results, ensure_ascii=False)[:1200]
+                if any(not d.get("ok") for d in dependency_results):
+                    status = "degraded"
+                    log += "；依赖未全部就绪"
+            elif runtime_deps and status != "ready":
                 status = "degraded"
                 log += f"；检测到外部依赖 {', '.join(runtime_deps)}，容器可能因依赖未就绪而启动失败"
             if not target_url:
@@ -420,7 +449,9 @@ class DockerDeployer:
             return DeployResult(
                 status, log[:4000], target_url=target_url,
                 container_id=container.id[:12], network=self.network_name,
-                meta={"recipe": recipe_name, "image": image, "port": host_port or port},
+                meta={"recipe": recipe_name, "image": image, "port": host_port or port,
+                      "dependencies": dependency_results,
+                      "dependency_env": sorted(dependency_env)},
             )
         except Exception as e:  # noqa: BLE001
             tail = ""
@@ -470,6 +501,11 @@ class DockerDeployer:
         return "degraded"
 
     def cleanup(self) -> None:
+        if self._dependencies is not None:
+            try:
+                self._dependencies.cleanup()
+            except Exception:  # noqa: BLE001, S110
+                pass
         try:
             if self._container is not None:
                 self._container.stop(timeout=5)
@@ -493,6 +529,15 @@ def cleanup_scan(scan_id: int) -> None:
             c = client.containers.get(f"codesentry-target-{scan_id}")
             c.stop(timeout=5)
             c.remove(force=True)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            for c in client.containers.list(
+                all=True, filters={"label": f"codesentry.scan_id={scan_id}"}
+            ):
+                if c.name.startswith("codesentry-dep-"):
+                    c.stop(timeout=3)
+                    c.remove(force=True)
         except Exception:  # noqa: BLE001, S110
             pass
         try:
@@ -537,6 +582,13 @@ def run_deploy(state: dict) -> dict:
         maven_image=settings.deploy_maven_image,
         allow_remote_images=settings.deploy_image_allow_remote,
         image_pull=settings.deploy_image_pull,
+        auto_dependencies=settings.deploy_auto_dependencies,
+        dependency_images={
+            "mysql": settings.deploy_dependency_mysql_image,
+            "redis": settings.deploy_dependency_redis_image,
+            "postgres": settings.deploy_dependency_postgres_image,
+        },
+        dependency_timeout_s=settings.deploy_dependency_timeout_s,
     )
     try:
         result = deployer.deploy()
