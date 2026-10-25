@@ -108,10 +108,11 @@ const menuGroups = [
   {
     label: 'Workspace',
     items: [
-      { path: '/', label: '概览', icon: Odometer },
+      { path: '/', label: 'Agent 审计', icon: Cpu },
+      { path: '/dashboard', label: '仪表盘', icon: Odometer },
       { path: '/instant', label: '即时分析', icon: Lightning },
-      { path: '/scans', label: '扫描管理', icon: Search },
-      { path: '/projects', label: '项目与定时', icon: Calendar },
+      { path: '/scans', label: '审计任务', icon: Search },
+      { path: '/projects', label: '项目管理', icon: Calendar },
       { path: '/reviews', label: '复核队列', icon: DocumentChecked },
     ],
   },
@@ -124,7 +125,7 @@ const menuGroups = [
       { path: '/prompts', label: 'Prompt 管理', icon: EditPen },
       { path: '/skills', label: 'Skills 管理', icon: MagicStick },
       { path: '/kb', label: '知识库', icon: Collection },
-      { path: '/rules', label: '规则管理', icon: SetUp },
+      { path: '/rules', label: '审计规则', icon: SetUp },
       { path: '/orchestration', label: '编排模板', icon: Share },
     ],
   },

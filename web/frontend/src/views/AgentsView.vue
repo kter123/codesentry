@@ -35,6 +35,9 @@
             </el-tag>
             <el-tag size="small" effect="plain">{{ agent.model_role || 'fast' }}</el-tag>
             <el-tag size="small" effect="plain">{{ profileName(agent.llm_profile_id) }}</el-tag>
+            <el-tag size="small" :type="agent.prompt_version ? 'success' : 'warning'" effect="plain">
+              Prompt {{ agent.prompt_version ? `v${agent.prompt_version}` : 'seed' }}
+            </el-tag>
           </div>
 
           <div class="muted" style="font-size: 12px; line-height: 1.7">
@@ -64,8 +67,8 @@
             <el-button size="small" type="primary" plain @click="$router.push(`/agents/${agent.name}`)">
               配置
             </el-button>
-            <el-button size="small" @click="$router.push(`/prompts?name=${agent.name}`)">
-              Prompt
+            <el-button size="small" @click="$router.push(`/agents/${agent.name}`)">
+              Prompt / 配置
             </el-button>
             <el-button size="small" @click="$router.push('/skills')">Skills</el-button>
           </div>

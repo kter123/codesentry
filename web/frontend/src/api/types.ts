@@ -147,6 +147,8 @@ export interface AgentConfig {
   model_role?: string
   llm_profile_id?: number | null
   preset_id?: number | null
+  prompt_version?: number | null
+  prompt_fallback?: boolean
   capabilities?: {
     engines?: string[]
     network?: boolean

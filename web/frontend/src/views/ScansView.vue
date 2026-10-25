@@ -1,6 +1,6 @@
 <template>
   <div>
-    <page-header title="扫描管理" subtitle="上传压缩包 / Git 仓库 / Diff，或查看历史扫描">
+    <page-header title="审计任务" subtitle="上传压缩包 / Git 仓库 / Diff，或查看历史审计任务">
       <template #actions>
         <el-button :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon>

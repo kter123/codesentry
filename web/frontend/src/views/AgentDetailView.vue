@@ -200,13 +200,26 @@
             title="未激活自定义 Prompt，当前使用代码内置种子 Prompt"
             style="margin-bottom: 10px"
           />
-          <pre v-if="promptInfo" class="pre-block light prompt-preview">{{ promptInfo.body || '—' }}</pre>
+          <el-input
+            v-model="promptDraft"
+            class="code-input prompt-editor"
+            type="textarea"
+            :rows="13"
+            spellcheck="false"
+            placeholder="该 Agent 的生效 Prompt 正文"
+          />
           <div class="toolbar" style="margin-top: 10px">
+            <el-button size="small" type="primary" :loading="promptSaving" @click="savePrompt">
+              保存为新版本
+            </el-button>
             <el-button size="small" :loading="previewing" @click="previewPrompt">预览注入</el-button>
             <el-button size="small" :loading="dryRunning" @click="dryRun">Dry-run</el-button>
             <el-button size="small" text type="primary" @click="$router.push(`/prompts?name=${agentName}`)">
-              管理 Prompt
+              版本 / Diff / 回滚
             </el-button>
+          </div>
+          <div class="muted" style="font-size: 12px; margin-top: 6px">
+            Prompt 与当前 Agent 绑定；保存后立即创建并激活新版本，代码内安全/输出契约尾仍会强制追加。
           </div>
           <el-alert
             v-for="(warning, index) in detailWarnings"
@@ -462,6 +475,8 @@ const abText = ref('{}')
 const temperature = ref<number | null>(null)
 
 const promptInfo = ref<PromptInfo | null>(null)
+const promptDraft = ref('')
+const promptSaving = ref(false)
 const detailWarnings = ref<string[]>([])
 const skills = ref<SkillItem[]>([])
 const allSkills = ref<Array<{ name: string; description?: string }>>([])
@@ -540,12 +555,14 @@ async function load(): Promise<void> {
     applyConfig(detailRes.value.config)
     detailWarnings.value = detailRes.value.warnings ?? []
     promptInfo.value = detailRes.value.prompt ?? null
+    promptDraft.value = promptInfo.value?.body || ''
   } else {
     loadError.value = `加载 Agent 配置失败：${errorMessage(detailRes.reason)}`
   }
 
   if (promptRes.status === 'fulfilled') {
     promptInfo.value = promptRes.value
+    promptDraft.value = promptInfo.value?.body || ''
   } else if (!promptInfo.value) {
     promptInfo.value = { body: '', fallback: true, version: null }
   }
@@ -625,6 +642,27 @@ async function save(): Promise<void> {
     saveError.value = `保存失败：${errorMessage(e)}`
   } finally {
     saving.value = false
+  }
+}
+
+async function savePrompt(): Promise<void> {
+  if (!promptDraft.value.trim()) {
+    ElMessage.warning('Prompt 不能为空')
+    return
+  }
+  promptSaving.value = true
+  try {
+    await api.post('/api/prompts', {
+      name: agentName.value,
+      body: promptDraft.value,
+      note: 'agent detail editor',
+    })
+    ElMessage.success('Prompt 新版本已创建并激活')
+    await load()
+  } catch (e) {
+    ElMessage.error(`保存 Prompt 失败：${errorMessage(e)}`)
+  } finally {
+    promptSaving.value = false
   }
 }
 

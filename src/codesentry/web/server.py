@@ -697,7 +697,7 @@ if STATIC_DIR.exists():
     _SPA_SEGMENTS = {
         "agents", "rules", "skills", "prompts", "reviews", "scans", "review",
         "llm", "usage", "orchestration", "audit", "settings", "users", "login",
-        "projects", "instant",
+        "projects", "instant", "dashboard",
     }
 
     @app.get("/{spa_path:path}")

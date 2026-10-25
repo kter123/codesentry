@@ -33,9 +33,15 @@ const router = createRouter({
       children: [
         {
           path: '',
-          name: 'overview',
+          name: 'audit-home',
+          component: () => import('@/views/AuditHomeView.vue'),
+          meta: { title: 'Agent 审计' },
+        },
+        {
+          path: 'dashboard',
+          name: 'dashboard',
           component: () => import('@/views/OverviewView.vue'),
-          meta: { title: '概览' },
+          meta: { title: '仪表盘' },
         },
         {
           path: 'instant',

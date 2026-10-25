@@ -1,6 +1,6 @@
 <template>
   <div>
-    <page-header title="概览" subtitle="扫描运行状态、复核队列与 LLM 用量的统一视图">
+    <page-header title="仪表盘" subtitle="扫描运行状态、审计质量、复核队列与 LLM 用量">
       <template #actions>
         <el-button :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon>

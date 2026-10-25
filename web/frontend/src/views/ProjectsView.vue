@@ -1,6 +1,6 @@
 <template>
   <div>
-    <page-header title="项目与定时" subtitle="项目源码/仓库与 cron 定时扫描">
+    <page-header title="项目管理" subtitle="项目源码/仓库与 cron 定时扫描">
       <template #actions>
         <el-button :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon>

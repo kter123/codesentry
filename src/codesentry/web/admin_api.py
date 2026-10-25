@@ -31,8 +31,14 @@ async def agent_timeline(scan_id: int) -> dict:
 @app.get("/api/agents")
 async def list_agents() -> dict:
     from codesentry.control.agent_config import list_agent_configs
+    from codesentry.control.prompts import get_active
 
-    return {"agents": list_agent_configs()}
+    rows = list_agent_configs()
+    for row in rows:
+        active = get_active(str(row.get("name") or ""))
+        row["prompt_version"] = active["version"] if active else None
+        row["prompt_fallback"] = active is None
+    return {"agents": rows}
 
 
 class PromptPayload(BaseModel):

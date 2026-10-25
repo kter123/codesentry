@@ -55,7 +55,7 @@ try {
     scans = []
   }
   const routes = [
-    '/ui/', '/ui/scans', '/ui/projects', '/ui/instant', '/ui/reviews', '/ui/agents',
+    '/ui/', '/ui/dashboard', '/ui/scans', '/ui/projects', '/ui/instant', '/ui/reviews', '/ui/agents',
     '/ui/agents/recon', '/ui/llm', '/ui/usage', '/ui/prompts', '/ui/skills',
     '/ui/kb', '/ui/rules', '/ui/orchestration', '/ui/audit', '/ui/settings',
     '/ui/users', '/ui/login',

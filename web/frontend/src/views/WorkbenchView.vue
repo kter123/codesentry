@@ -30,6 +30,8 @@
       <el-tag v-if="controlState?.stop_requested" type="danger" size="small">停止中</el-tag>
     </div>
 
+    <agent-flow :nodes="tree" :selected="eventFilter.agent" @select="onFlowSelect" />
+
     <el-row :gutter="12">
       <el-col :xs="24" :md="5">
         <div class="panel workbench-col">
@@ -206,6 +208,7 @@ import { ElMessage } from 'element-plus'
 
 import { api, errorMessage } from '@/api/client'
 import type { FindingDetail, GraphFinding, ScanRow } from '@/api/types'
+import AgentFlow from '@/components/AgentFlow.vue'
 import ErrorAlert from '@/components/ErrorAlert.vue'
 import JsonBlock from '@/components/JsonBlock.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -305,6 +308,10 @@ const filteredEvents = computed(() =>
     .filter((e) => !eventFilter.type || e.event_type === eventFilter.type)
     .slice(-1000),
 )
+
+function onFlowSelect(key: string): void {
+  eventFilter.agent = eventFilter.agent === key ? '' : key
+}
 
 function eventSummary(event: AgentEvent): string {
   const payload = event.payload || {}
