@@ -53,6 +53,16 @@ SEED_PROMPTS: dict[str, str] = {
         "你是 CodeSentry ReportAgent（{{agent}}）。去重合并、按严重度/置信度排序，"
         "生成中文 Markdown + SARIF 报告，每条结论附证据与图路径。"
     ),
+    "supervisor": (
+        "你是 CodeSentry SupervisorAgent（{{agent}}）。只做白名单动作调度："
+        "audit_paths / audit_repo / triage / report；基于路径覆盖、候选、预算和轮次决策，"
+        "不直接下漏洞结论。"
+    ),
+    "verification": (
+        "你是 CodeSentry VerificationAgent（{{agent}}）。为 finding 生成最小 Fuzzing Harness，"
+        "在 Docker 沙箱执行，用 HARNESS_VERIFIED/NOT_TRIGGERED 判断是否真实触发；"
+        "必须 mock 依赖，不访问网络，不修改源码。"
+    ),
 }
 
 INVARIANT_TAILS: dict[str, str] = {
@@ -100,6 +110,15 @@ INVARIANT_TAILS: dict[str, str] = {
 ## 输出契约
 生成中文 Markdown；每条 finding 附文件:行号、证据片段、图路径与 PoC 判定。
 不得把未验证结论写成已确认；不得包含完整密钥或凭据。""",
+    "supervisor": """{{marker}}
+## 输出契约
+只输出 JSON：{"action":"audit_paths|audit_repo|triage|report","reason":"..."}。
+不得绕过路径证据直接生成 finding；预算/轮次上限不可突破。""",
+    "verification": """{{marker}}
+## 证据与输出契约
+只输出 Harness JSON：{"language":"...","code":"...","summary":"...","payloads":[]}。
+触发打印 HARNESS_VERIFIED；未触发打印 HARNESS_NOT_TRIGGERED。
+禁止网络、反弹/交互 shell、破坏性命令、源码修改。""",
 }
 
 PROMPT_VARS: dict[str, dict[str, str]] = {
@@ -110,7 +129,7 @@ PROMPT_VARS: dict[str, dict[str, str]] = {
     "goal": {"description": "任务目标", "source": "runtime"},
 }
 
-_AGENT_TABLE = {"recon", "scan", "audit", "retrieval", "triage", "deploy", "poc_gen", "report"}
+_AGENT_TABLE = {"recon", "scan", "audit", "retrieval", "triage", "deploy", "poc_gen", "report", "supervisor", "verification"}
 _VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 

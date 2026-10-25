@@ -39,15 +39,32 @@ def run_supervisor(state: dict, runtime=None, llm=None) -> dict:
 
     payload = {"action": action, "reason": reason, "pending": pending,
                "rounds": rounds, "candidates": candidates,
-               "budget_phase": budget.get("phase")}
+               "budget_phase": budget.get("phase"),
+               "prompt_version": getattr(runtime, "prompt_version", None),
+               "enabled": getattr(runtime, "enabled", None)}
     if scan_id:
         publish_event(scan_id, "supervisor.decision", agent="supervisor",
                       phase="supervisor", payload=payload)
     sup = {**previous, **payload,
            "audit_repo_done": audit_repo_done or action == "audit_repo",
            "triaged": bool(previous.get("triaged")) or action == "triage"}
-    return {"supervisor": sup, "phase": action,
-            "messages": [*(state.get("messages") or []), f"supervisor: {action} ({reason})"]}
+    if runtime is not None and not getattr(runtime, "enabled", True):
+        sup["warning"] = "supervisor disabled; deterministic fallback"
+    extra = {}
+    if runtime is not None:
+        pv: dict = runtime.prompt_snapshot()
+        sk: dict = runtime.skills_snapshot()
+        if pv:
+            extra["prompt_versions"] = pv
+        if sk:
+            extra["skills_snapshot"] = sk
+        warnings = list(getattr(runtime, "warnings", []) or [])
+    else:
+        warnings = []
+    return {"supervisor": sup, "phase": action, **extra,
+            "messages": [*(state.get("messages") or []),
+                         *(f"supervisor: {w}" for w in warnings),
+                         f"supervisor: {action} ({reason})"]}
 
 
 def route_supervisor(state: dict) -> str:

@@ -7,7 +7,7 @@ from codesentry.orchestrator.registry import all_nodes, default_nodes, get_node
 
 def test_registry_has_six_nodes():
     names = {n.name for n in all_nodes()}
-    assert names == {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
+    assert names == {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report", "supervisor", "verification"}
     assert get_node("triage").requires_llm is True
     assert get_node("recon").required is True
 
@@ -19,7 +19,7 @@ def test_unknown_node_raises():
 
 def test_default_nodes_callable():
     d = default_nodes()
-    assert set(d) == {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
+    assert set(d) == {"recon", "graph_build", "scan", "audit", "triage", "deploy", "poc_gen", "report", "supervisor"}
     assert all(callable(fn) for fn in d.values())
 
 

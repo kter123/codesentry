@@ -36,10 +36,11 @@
           <h3 class="panel-title">Agent 树</h3>
           <el-scrollbar height="560px">
             <div
-              v-for="node in tree"
+              v-for="node in treeRows"
               :key="node.agent_key"
               class="agent-node"
               :class="{ active: eventFilter.agent === node.name }"
+              :style="{ paddingLeft: `${8 + node.depth * 14}px` }"
               @click="eventFilter.agent = eventFilter.agent === node.name ? '' : node.name"
             >
               <el-tag size="small" :type="node.status === 'ok' ? 'success' : node.status === 'failed' ? 'danger' : 'info'">
@@ -215,6 +216,7 @@ interface AgentEvent {
 interface AgentNode {
   agent_key: string
   parent_key?: string
+  depth?: number
   name: string
   phase?: string
   status?: string
@@ -266,6 +268,21 @@ const streamRef = ref<{ setScrollTop: (v: number) => void; wrapRef?: HTMLElement
 const eventFilter = reactive({ agent: '', type: '' })
 let source: EventSource | null = null
 let pollTimer: number | undefined
+
+const treeRows = computed(() => {
+  const byKey = new Map(tree.value.map((n) => [n.agent_key, n]))
+  const depthOf = (node: AgentNode, seen = new Set<string>()): number => {
+    let depth = 0
+    let parent = node.parent_key
+    while (parent && byKey.has(parent) && !seen.has(parent)) {
+      seen.add(parent)
+      depth += 1
+      parent = byKey.get(parent)?.parent_key
+    }
+    return depth
+  }
+  return tree.value.map((n) => ({ ...n, depth: depthOf(n) }))
+})
 
 const verifiedCount = computed(() =>
   findings.value.filter((f) => f.verdict === 'verified').length,

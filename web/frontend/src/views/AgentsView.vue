@@ -2,7 +2,7 @@
   <div>
     <page-header
       title="Agent 管理"
-      subtitle="六个编排节点的启停、模型绑定与能力边界"
+      subtitle="编排/验证节点的启停、模型绑定与能力边界"
     >
       <template #actions>
         <el-button :loading="loading" @click="load">

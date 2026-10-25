@@ -18,6 +18,8 @@ NODE_SPECS: dict[str, NodeSpec] = {
     "recon": NodeSpec("recon", "仓库画像与扫描计划", required=True),
     "graph_build": NodeSpec("graph_build", "代码图构建（增量）", required=True),
     "scan": NodeSpec("scan", "引擎执行并转为图增量", requires_llm=False),
+    "supervisor": NodeSpec("supervisor", "统一调度与预算/轮次决策", requires_llm=False),
+    "verification": NodeSpec("verification", "Harness 生成与沙箱验证", requires_llm=True),
     "audit": NodeSpec("audit", "Agent 主动代码审计", requires_llm=True),
     "triage": NodeSpec("triage", "Agent 对抗性验证与降噪", requires_llm=True),
     "deploy": NodeSpec("deploy", "Agent 自主部署", requires_llm=True),
@@ -46,6 +48,7 @@ def default_nodes() -> dict[str, Callable]:
     from codesentry.agents.recon import run_recon
     from codesentry.agents.report import run_report
     from codesentry.agents.scan import run_scan_agent
+    from codesentry.agents.supervisor import run_supervisor
     from codesentry.agents.triage import run_triage
 
     def default_report(state):
@@ -60,4 +63,5 @@ def default_nodes() -> dict[str, Callable]:
         "deploy": run_deploy_agent,
         "poc_gen": run_poc_gen,
         "report": default_report,
+        "supervisor": run_supervisor,
     }

@@ -16,6 +16,12 @@
 - API：events/SSE/agent-tree/pause/resume/stop。
 - Vue3 审计工作台：Agent 树、事件流、上下文、路径/Findings/验证/工具/报告；暂停/停止；图/报告入口。
 
+### 新 Agent 管理嵌合
+
+- `supervisor` / `verification` 已加入 `AGENT_NAMES`、Agent 默认配置、Prompt 种子/固定尾、Registry、Preset/Skills/LLM 绑定。
+- Verification 使用自己的 Agent 配置生成 Harness。
+- Agent 树按 `scan → group → node` 层级生成并在工作台缩进展示。
+
 ### Phase 3：Harness 全语言 + 工具网关
 
 - Harness 模板：CWE-78/89/79/22/94/95/502/918/611/1333 + payload 组。
@@ -51,9 +57,9 @@
 
 ## 未完成/限制
 
-- Harness 全语言统一镜像未完成：已提供 `docker/harness/Dockerfile`，但本机 Docker 构建等待 apt 网络超时；当前用 Python 镜像真实验证。其他语言需镜像包含运行时，否则 `environment_error/plausible`。
-- 工具网关二进制可能未安装（Gitleaks/Bandit/OSV/Safety），不可用时返回 `unavailable`，不阻断扫描。
-- `agent_nodes` 目前由 node_runs/telemetry 生成，父子层级为扁平 root；后续可细化 handoff 树。
+- Harness 全语言已通过按语言镜像验证：Python/JavaScript/PHP/Ruby/Go/Java/Shell 均返回 `HARNESS_VERIFIED`；统一 `docker/harness/Dockerfile` 保留为可选一体镜像。
+- 工具网关：Bandit/Safety 已安装；Gitleaks/OSV 未安装时返回 `unavailable`，不阻断扫描。
+- `agent_nodes` 已按 `scan → group → node` 生成层级；工作台按 parent/depth 缩进展示。
 - 暂停只在节点边界生效；长 LLM 节点需等当前节点结束。
 - JVWA 全量扫描尝试在 CodeQL Java 建库阶段长时间无进展后停止；改用小 Java 合成项目完成统一链路验证。kvf ready 仍未执行。
 - 全量事件回放 UI 是轮询/SSE 增量，未做时间轴拖拽。

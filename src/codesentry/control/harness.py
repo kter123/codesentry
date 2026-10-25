@@ -37,11 +37,35 @@ def _command(language: str) -> str:
         "javascript": f"node {path}",
         "php": f"php {path}",
         "ruby": f"ruby {path}",
-        "java": f"java {path}",
-        "go": f"go run {path}",
+        "java": ("cd /tmp && "
+                 "JC=$(command -v javac || true); "
+                 "[ -z \"$JC\" ] && [ -x \"$JAVA_HOME/bin/javac\" ] && JC=\"$JAVA_HOME/bin/javac\"; "
+                 "[ -z \"$JC\" ] && JC=$(ls /usr/lib/jvm/*/bin/javac /opt/java/openjdk/bin/javac 2>/dev/null | head -1); "
+                 "J=$(command -v java || true); "
+                 "[ -z \"$J\" ] && [ -x \"$JAVA_HOME/bin/java\" ] && J=\"$JAVA_HOME/bin/java\"; "
+                 "[ -z \"$J\" ] && J=$(ls /usr/lib/jvm/*/bin/java /opt/java/openjdk/bin/java 2>/dev/null | head -1); "
+                 "[ -n \"$JC\" ] && [ -n \"$J\" ] && \"$JC\" -d /tmp Harness.java && \"$J\" -cp /tmp Harness"),
+        "go": ("GO=$(command -v go || echo /usr/local/go/bin/go); "
+              f"GOCACHE=/tmp/go-cache \"$GO\" run {path}"),
         "bash": f"bash {path}",
     }
     return f"""sh -lc 'printf "%s" "$HARNESS_CODE" > {path}; {runners[language]}'"""
+
+
+def image_for_language(language: str) -> str:
+    from codesentry.config import get_settings
+
+    s = get_settings()
+    mapping = {
+        "python": s.harness_python_image,
+        "javascript": s.harness_javascript_image,
+        "php": s.harness_php_image,
+        "java": s.harness_java_image,
+        "go": s.harness_go_image,
+        "ruby": s.harness_ruby_image,
+        "bash": s.harness_shell_image,
+    }
+    return mapping.get(language) or s.harness_image
 
 
 def parse_harness_output(text: str) -> tuple[str, str]:
@@ -81,7 +105,7 @@ def run_harness(code: str, language: str, *, image: str = "",
             nano_cpus=500_000_000,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
-            tmpfs={"/tmp": "rw,size=100m,mode=1777"},
+            tmpfs={"/tmp": "rw,size=256m,mode=1777,exec"},
             working_dir="/tmp",
             auto_remove=False,
             labels={"codesentry.role": "harness"},
@@ -119,14 +143,18 @@ def run_harness(code: str, language: str, *, image: str = "",
                 "reason": "沙箱执行失败", "duration_ms": int((time.time() - start) * 1000)}
 
 
-def generate_harness(llm, finding: dict, source: str, graph: dict | None = None) -> dict:
+def generate_harness(llm, finding: dict, source: str, graph: dict | None = None,
+                     system: str | None = None) -> dict:
     from codesentry.control.harness_templates import for_cwe
 
     template = for_cwe(int(finding.get("cwe") or 0))
     user = json.dumps({"finding": finding, "source": source[:16000],
                        "graph": graph or {}, "template": template},
                       ensure_ascii=False)[:20000]
-    text = llm.complete(HARNESS_SYSTEM, user, model_role="deep")
+    prompt = system or HARNESS_SYSTEM
+    if "HARNESS_VERIFIED" not in prompt:
+        prompt = prompt.rstrip() + "\n\n" + HARNESS_SYSTEM
+    text = llm.complete(prompt, user, model_role="deep")
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("LLM 未返回 Harness JSON")
@@ -242,18 +270,20 @@ def verify_finding(finding_id: int) -> dict:
     start = max(1, int(line or 1) - 50)
     end = min(len(lines), int(line or 1) + 50)
     source = "\n".join(f"{i}: {lines[i - 1]}" for i in range(start, end + 1))
-    runtime = prepare_agent("audit", scan_id=int(scan_id), with_llm=True)
+    runtime = prepare_agent("verification", scan_id=int(scan_id), with_llm=True)
     if runtime is None or runtime.llm is None:
-        raise RuntimeError("LLM 未配置，无法生成 Harness")
+        raise RuntimeError("Verification LLM 未配置，无法生成 Harness")
     finding = {"rule_id": rule_id, "cwe": cwe, "severity": severity,
                "file": rel, "line": line, "message": message}
     try:
-        generated = generate_harness(runtime.llm, finding, source)
+        generated = generate_harness(runtime.llm, finding, source,
+                                     system=runtime.system())
     except Exception as e:
         raise RuntimeError(f"Harness 生成失败：{str(e)[:200]}") from e
     settings = get_settings()
     result = run_harness(
-        generated["code"], generated["language"], image=settings.harness_image,
+        generated["code"], generated["language"],
+        image=image_for_language(generated["language"]),
         timeout_s=settings.harness_timeout_s, allow_network=settings.harness_allow_network,
         pull_policy=settings.harness_pull_policy,
     )

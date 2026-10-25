@@ -98,7 +98,7 @@ def test_disabled_non_llm_node_is_skipped(monkeypatch):
 
 def test_snapshot_agents_shape():
     prompts, skills, llms = _snapshot_agents()
-    assert set(prompts) == {"recon", "scan", "audit", "triage", "deploy", "poc_gen", "report"}
+    assert set(prompts) == {"recon", "scan", "audit", "triage", "deploy", "poc_gen", "report", "supervisor", "verification"}
     for v in prompts.values():
         assert "version" in v and "fallback" in v
     assert isinstance(skills, dict) and isinstance(llms, dict)

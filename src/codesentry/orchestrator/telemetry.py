@@ -23,6 +23,7 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
     status = status_override or "ok"
     error = ""
     run = NodeRun(tokens=tokens, tool_calls=tool_calls)
+    group = _group_for(node)
     agent_key = f"{node}:{start_at.isoformat()}"
     publish = None
     try:
@@ -30,7 +31,13 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
 
         publish_event(scan_id, "node.start", agent=node, phase=node,
                       payload={"node": node, "started_at": start_at.isoformat()})
-        upsert_agent_node(scan_id, agent_key, name=node, phase=node, status="running")
+        root_key = f"scan:{scan_id}"
+        upsert_agent_node(scan_id, root_key, name=f"scan #{scan_id}", phase="scan",
+                          status="running", parent_key="")
+        upsert_agent_node(scan_id, f"group:{group}", name=group, phase=group,
+                          status="running", parent_key=root_key)
+        upsert_agent_node(scan_id, agent_key, name=node, phase=node, status="running",
+                          parent_key=f"group:{group}")
         publish = publish_event
     except Exception:  # noqa: BLE001
         publish = None
@@ -70,6 +77,25 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
                 upsert_agent_node(scan_id, agent_key, name=node, phase=node,
                                   status=status, tokens=run.tokens or 0,
                                   tool_calls=run.tool_calls or 0,
-                                  summary=error or f"{duration_ms}ms")
+                                  summary=error or f"{duration_ms}ms",
+                                  parent_key=f"group:{group}")
             except Exception:  # noqa: BLE001, S110
                 pass
+
+
+def _group_for(node: str) -> str:
+    if node in ("recon", "graph_build"):
+        return "prepare"
+    if node in ("scan", "path_build"):
+        return "engine"
+    if node == "supervisor":
+        return "orchestrate"
+    if node in ("audit", "audit_plan", "audit_path", "audit_collect", "audit_finalize"):
+        return "audit"
+    if node == "triage":
+        return "decision"
+    if node in ("deploy", "poc_gen"):
+        return "deliver"
+    if node == "report":
+        return "report"
+    return "other"

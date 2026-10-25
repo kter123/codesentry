@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     harness_timeout_s: int = 90
     harness_allow_network: bool = False
     harness_pull_policy: Literal["never", "missing", "always"] = "missing"
+    harness_python_image: str = "docker.m.daocloud.io/library/python:3.12-slim"
+    harness_javascript_image: str = "docker.m.daocloud.io/library/node:20-slim"
+    harness_php_image: str = "docker.m.daocloud.io/library/php:8.3-cli"
+    harness_java_image: str = "docker.m.daocloud.io/library/maven:3.8-openjdk-11"
+    harness_go_image: str = "docker.m.daocloud.io/library/golang:1.23-alpine"
+    harness_ruby_image: str = "docker.m.daocloud.io/library/ruby:3.3-slim"
+    harness_shell_image: str = "docker.m.daocloud.io/library/debian:bookworm-slim"
     tool_allow_network: bool = False
     tool_timeout_s: int = 300
     scheduler_interval_s: int = 30

@@ -4,7 +4,7 @@ from datetime import UTC
 from operator import add
 from typing import Annotated, TypedDict
 
-AGENT_NAMES = ("recon", "scan", "audit", "triage", "deploy", "poc_gen", "report")
+AGENT_NAMES = ("recon", "scan", "audit", "triage", "deploy", "poc_gen", "report", "supervisor", "verification")
 
 # Supervisor 介入点（§7.3）
 INTERRUPT_INSUFFICIENT_EVIDENCE = "insufficient_evidence"

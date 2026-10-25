@@ -65,3 +65,13 @@ def test_run_harness_environment_error(monkeypatch):
     out = harness.run_harness("print(1)", "python", image="missing", pull_policy="never")
     assert out["status"] == "environment_error"
     assert out["verdict"] == "plausible"
+
+
+def test_harness_image_per_language():
+    assert "python" in harness.image_for_language("python")
+    assert "node" in harness.image_for_language("javascript")
+    assert "php" in harness.image_for_language("php")
+    assert harness.image_for_language("java")
+    assert harness.image_for_language("go")
+    assert harness.image_for_language("ruby")
+    assert harness.image_for_language("bash")

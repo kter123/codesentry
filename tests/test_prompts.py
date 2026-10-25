@@ -2,7 +2,7 @@ from codesentry.agents.prompts import SEED_PROMPTS, load_prompt
 
 
 def test_seed_all_agents():
-    assert set(SEED_PROMPTS) == {"recon", "scan", "audit", "retrieval", "triage", "deploy", "poc_gen", "report"}
+    assert set(SEED_PROMPTS) == {"recon", "scan", "audit", "retrieval", "triage", "deploy", "poc_gen", "report", "supervisor", "verification"}
 
 
 def test_load_prompt_fallback_no_db(monkeypatch):

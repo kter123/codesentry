@@ -71,3 +71,23 @@ def test_supervisor_decisions(monkeypatch):
     out = supervisor.run_supervisor({"scan_id": sid, "budget": {"phase": "breach"}})
     assert out["supervisor"]["action"] == "report"
     _cleanup(sid)
+
+
+def test_agent_tree_groups():
+    sid = 970400 + uuid.uuid4().int % 1000
+    try:
+        from codesentry.orchestrator.telemetry import node_run
+
+        with node_run(sid, "scan"):
+            pass
+        nodes = events.list_agent_nodes(sid)
+        keys = {n["agent_key"] for n in nodes}
+        assert f"scan:{sid}" in keys
+        assert "group:engine" in keys
+        assert any(k.startswith("scan:") and k != f"scan:{sid}" for k in keys)
+        group = next(n for n in nodes if n["agent_key"] == "group:engine")
+        assert group["parent_key"] == f"scan:{sid}"
+    finally:
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute("DELETE FROM agent_nodes WHERE scan_id=%s", (sid,))
+            c.commit()

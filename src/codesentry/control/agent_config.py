@@ -52,6 +52,18 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
         "timeout_s": 900, "max_iterations": 14,
         "budget_override": {"max_tokens": 300_000, "max_tool_calls": 350, "max_cost_usd": 8.0},
     },
+    "supervisor": {
+        "display_name": "Supervisor", "model_role": "fast", "enabled": True,
+        "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
+        "timeout_s": 120, "max_iterations": 6,
+        "budget_override": {"max_tokens": 40_000, "max_tool_calls": 40, "max_cost_usd": 0.5},
+    },
+    "verification": {
+        "display_name": "Verification", "model_role": "deep", "enabled": True,
+        "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": True},
+        "timeout_s": 240, "max_iterations": 8,
+        "budget_override": {"max_tokens": 120_000, "max_tool_calls": 120, "max_cost_usd": 3.0},
+    },
     "report": {
         "display_name": "Report", "model_role": "fast", "enabled": True,
         "capabilities": {"engines": [], "network": False, "shell": False, "poc_exec": False},
