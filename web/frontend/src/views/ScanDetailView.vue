@@ -227,6 +227,10 @@
           </el-tab-pane>
 
           <el-tab-pane label="Findings" name="findings">
+            <div v-if="scan?.status === 'running'" class="toolbar">
+              <el-tag type="success" effect="dark">Agent 实时结果</el-tag>
+              <span class="muted">运行中会持续追加路径审计 finding，最终以扫描完成为准</span>
+            </div>
             <el-alert
               v-if="findingNote"
               type="info"
@@ -274,7 +278,9 @@
           <el-tab-pane label="审计路径" name="paths">
             <div class="toolbar">
               <el-tag effect="plain">路径 {{ coverage.total ?? coverage.paths ?? auditPaths.length }}</el-tag>
+              <el-tag type="success" effect="plain">已审 {{ coverage.done ?? 0 }}</el-tag>
               <el-tag type="warning" effect="plain">待审 {{ coverage.pending ?? 0 }}</el-tag>
+              <el-tag v-if="coverage.timeout" type="danger" effect="plain">超时 {{ coverage.timeout }}</el-tag>
               <el-tag type="info" effect="plain">Entry-only {{ coverage.entry_only ?? 0 }}</el-tag>
               <el-tag type="success" effect="plain">
                 Sink {{ coverage.sinks_covered ?? 0 }}/{{ coverage.sinks_total ?? '—' }}
@@ -366,6 +372,47 @@
             </div>
           </div>
           <el-empty v-else :image-size="56" description="无法加载源码切片（文件可能不在 work 目录）" />
+
+          <h3 class="panel-title" style="margin-top: 18px">修复建议</h3>
+          <div class="toolbar" style="margin-top: 6px">
+            <el-button size="small" :loading="fixLoading" @click="generateFix">
+              生成修复建议
+            </el-button>
+            <span class="muted">只生成 patch，不会修改源码</span>
+          </div>
+          <template v-if="selected.fix_summary || selected.fix_patch">
+            <el-alert
+              v-if="selected.fix_summary"
+              type="success"
+              :closable="false"
+              :title="selected.fix_summary"
+              style="margin-top: 8px"
+            />
+            <pre v-if="selected.fix_patch" class="pre-block" style="margin-top: 8px">{{ selected.fix_patch }}</pre>
+            <div v-if="selected.fix_tests?.length" class="muted" style="font-size: 12px">
+              建议测试：{{ (selected.fix_tests as string[]).join('；') }}
+            </div>
+          </template>
+
+          <h3 class="panel-title" style="margin-top: 18px">Harness 验证</h3>
+          <div class="toolbar" style="margin-top: 6px">
+            <el-button size="small" :loading="verifyLoading" @click="verifyFinding">
+              Harness 验证
+            </el-button>
+            <span class="muted">沙箱执行，不修改源码；默认无网络</span>
+          </div>
+          <template v-if="verifyResult">
+            <el-alert
+              :type="verifyResult.verdict === 'verified' ? 'success' : verifyResult.verdict === 'rejected' ? 'info' : 'warning'"
+              :closable="false"
+              :title="`${verifyResult.verdict || 'plausible'} · ${verifyResult.summary || ''}`"
+              style="margin-top: 8px"
+            />
+            <pre v-if="verifyResult.stdout" class="pre-block" style="margin-top: 8px">{{ verifyResult.stdout }}</pre>
+            <div v-if="verifyResult.stderr" class="muted mono" style="font-size: 12px; margin-top: 6px">
+              {{ verifyResult.stderr }}
+            </div>
+          </template>
 
           <h3 class="panel-title" style="margin-top: 18px">污点与利用链</h3>
           <json-block :value="selected.taint_metadata ?? null" />
@@ -650,6 +697,9 @@ const drawer = ref(false)
 const selected = ref<FindingDetail | null>(null)
 const detailLoading = ref(false)
 const sourceLines = ref<SourceLine[]>([])
+const fixLoading = ref(false)
+const verifyLoading = ref(false)
+const verifyResult = ref<Record<string, unknown> | null>(null)
 const pathDrawer = ref(false)
 const pathDetail = ref<PathDetail | null>(null)
 const pathLoading = ref(false)
@@ -962,6 +1012,41 @@ async function load(silent = false): Promise<void> {
   if (!silent) loading.value = false
   void loadArtifacts()
   schedulePoll()
+}
+
+async function verifyFinding(): Promise<void> {
+  if (!selected.value?.id) return
+  verifyLoading.value = true
+  verifyResult.value = null
+  try {
+    verifyResult.value = await api.post<Record<string, unknown>>(
+      `/api/findings/${selected.value.id}/verify`,
+    )
+  } catch (e) {
+    error.value = `Harness 验证失败：${errorMessage(e)}`
+  } finally {
+    verifyLoading.value = false
+  }
+}
+
+async function generateFix(): Promise<void> {
+  if (!selected.value?.id) return
+  fixLoading.value = true
+  try {
+    const res = await api.post<{ summary?: string; patch?: string; tests?: string[] }>(
+      `/api/findings/${selected.value.id}/fix`,
+    )
+    selected.value = {
+      ...selected.value,
+      fix_summary: res.summary || '',
+      fix_patch: res.patch || '',
+      fix_tests: res.tests || [],
+    }
+  } catch (e) {
+    error.value = `生成修复建议失败：${errorMessage(e)}`
+  } finally {
+    fixLoading.value = false
+  }
 }
 
 async function openFinding(row: GraphFinding): Promise<void> {

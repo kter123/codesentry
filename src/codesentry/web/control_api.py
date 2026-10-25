@@ -1053,6 +1053,25 @@ class CommentPayload(BaseModel):
     author: str = ""
 
 
+@app.post("/api/findings/{finding_id}/verify")
+async def verify_finding_harness(finding_id: int) -> dict:
+    from codesentry.control.harness import verify_finding
+
+    try:
+        return await run_in_threadpool(verify_finding, finding_id)
+    except ValueError as e:
+        raise HTTPException(404 if "not found" in str(e) else 400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
+
+
+@app.get("/api/scans/{scan_id}/verifications")
+async def list_verifications(scan_id: int, finding_id: int | None = None) -> dict:
+    from codesentry.control.harness import list_runs
+
+    return {"scan_id": scan_id, "runs": list_runs(scan_id, finding_id)}
+
+
 @app.post("/api/findings/{finding_id}/fix")
 async def generate_finding_fix(finding_id: int) -> dict:
     from pathlib import Path

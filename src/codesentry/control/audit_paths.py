@@ -206,6 +206,10 @@ def coverage(scan_id: int) -> dict:
         "total": int(total or 0),
         "pending": int(by_status.get("pending", 0)),
         "auditing": int(by_status.get("auditing", 0)),
+        "done": max(0, int(total or 0) - int(by_status.get("pending", 0))
+                    - int(by_status.get("auditing", 0))),
+        "timeout": int(by_status.get("timeout", 0)),
+        "error": int(by_status.get("error", 0)),
         "paths": int(total or 0),
         "entries_covered": int(entries or 0),
         "sinks_covered": int(sinks or 0),

@@ -159,11 +159,37 @@
               <el-switch v-model="codeql.cache" />
             </el-form-item>
           </el-col>
+          <el-col :xs="12" :sm="4">
+            <el-form-item label="自动安装">
+              <el-switch v-model="codeql.auto_install" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="4">
+            <el-form-item label="许可确认">
+              <el-switch v-model="codeql.license_ack" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="5">
+            <el-form-item label="安装版本">
+              <el-input v-model="codeql.version" placeholder="2.27.2" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="5">
+            <el-form-item label="SHA256（可选）">
+              <el-input v-model="codeql.sha256" placeholder="下载包校验和" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="安装目录（留空默认 work/tools/codeql）">
+              <el-input v-model="codeql.install_dir" />
+            </el-form-item>
+          </el-col>
         </el-row>
       </el-form>
       <div class="toolbar" style="margin-bottom: 0">
         <el-button type="primary" :loading="codeqlSaving" @click="saveCodeql">保存</el-button>
         <el-button :loading="codeqlTesting" @click="testCodeql">探测</el-button>
+        <el-button :loading="codeqlInstalling" @click="installCodeql">安装 / 更新</el-button>
         <span v-if="codeqlStatus?.found" class="muted">
           {{ codeqlStatus.version || '已安装' }} · {{ codeqlStatus.binary }}
         </span>
@@ -231,6 +257,37 @@
           <el-input v-model="hookForm.events" placeholder="事件，逗号分隔；* 表示全部" />
         </el-col>
       </el-row>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">远程 PoC 目标（只读探测）</h2>
+      <div class="toolbar">
+        <el-switch v-model="poc.enabled" active-text="启用远程目标" />
+        <el-switch v-model="poc.allow_private" active-text="允许私网" />
+        <el-button size="small" type="primary" :loading="pocSaving" @click="savePoc">保存</el-button>
+        <span class="muted">只做 GET/HEAD 探测，不执行 finding payload；默认关闭。</span>
+      </div>
+      <el-table :data="targets" size="small" max-height="220" style="margin-top: 10px">
+        <el-table-column prop="id" label="#" width="60" />
+        <el-table-column prop="name" label="名称" min-width="130" />
+        <el-table-column prop="base_url" label="Base URL" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="allowed_hosts" label="允许 host" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="expires_at" label="过期" min-width="160" />
+        <el-table-column label="操作" width="140">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="probeTarget(row)">探测</el-button>
+            <el-button link type="danger" @click="removeTarget(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-row :gutter="10" style="margin-top: 8px">
+        <el-col :xs="24" :sm="4"><el-input v-model="targetForm.name" placeholder="名称" /></el-col>
+        <el-col :xs="24" :sm="7"><el-input v-model="targetForm.base_url" placeholder="https://authorized.example" /></el-col>
+        <el-col :xs="24" :sm="5"><el-input v-model="targetForm.allowed_hosts" placeholder="host1,host2" /></el-col>
+        <el-col :xs="24" :sm="5"><el-input v-model="targetForm.expires_at" placeholder="过期 ISO8601（可选）" /></el-col>
+        <el-col :xs="24" :sm="3"><el-button type="primary" @click="addTarget">新增</el-button></el-col>
+      </el-row>
+      <div v-if="pocResult" class="muted" style="font-size: 12px; margin-top: 6px">{{ pocResult }}</div>
     </div>
 
     <div class="panel">
@@ -358,9 +415,15 @@ const codeql = reactive({
   codeql_build_command: '',
   timeout: 1800,
   cache: true,
+  auto_install: false,
+  license_ack: false,
+  version: '2.27.2',
+  sha256: '',
+  install_dir: '',
 })
 const codeqlSaving = ref(false)
 const codeqlTesting = ref(false)
+const codeqlInstalling = ref(false)
 const codeqlResult = ref<{ ok: boolean; text: string } | null>(null)
 const codeqlStatus = ref<Record<string, unknown> | null>(null)
 
@@ -391,6 +454,11 @@ const maintaining = ref(false)
 const maintenanceResult = ref('')
 const importMode = ref('merge')
 const configResult = ref('')
+const poc = reactive({ enabled: false, allow_private: false })
+const pocSaving = ref(false)
+const pocResult = ref('')
+const targets = ref<Array<Record<string, unknown>>>([])
+const targetForm = reactive({ name: '', base_url: '', allowed_hosts: '', expires_at: '' })
 
 async function loadGroup(group: Group): Promise<void> {
   errors[group] = ''
@@ -422,6 +490,70 @@ async function load(): Promise<void> {
   await Promise.all([loadGroup('llm'), loadGroup('embedding'), loadCodeql(),
                      loadNotifications(), loadDisk()])
   loading.value = false
+}
+
+async function loadPoc(): Promise<void> {
+  try {
+    const [cfg, list] = await Promise.all([
+      api.get<Record<string, string>>('/api/settings/poc'),
+      api.get<{ targets?: Array<Record<string, unknown>> }>('/api/poc-targets'),
+    ])
+    poc.enabled = cfg.poc_remote_enabled === 'true'
+    poc.allow_private = cfg.poc_remote_allow_private === 'true'
+    targets.value = list.targets || []
+  } catch {
+    targets.value = []
+  }
+}
+
+async function savePoc(): Promise<void> {
+  pocSaving.value = true
+  try {
+    await api.put('/api/settings/poc', {
+      values: {
+        poc_remote_enabled: poc.enabled ? 'true' : 'false',
+        poc_remote_allow_private: poc.allow_private ? 'true' : 'false',
+      },
+    })
+    pocResult.value = '远程目标设置已保存'
+  } catch (e) {
+    pocResult.value = `保存失败：${errorMessage(e)}`
+  } finally {
+    pocSaving.value = false
+  }
+}
+
+async function addTarget(): Promise<void> {
+  try {
+    await api.post('/api/poc-targets', {
+      name: targetForm.name,
+      base_url: targetForm.base_url,
+      allowed_hosts: targetForm.allowed_hosts.split(',').map((x) => x.trim()).filter(Boolean),
+      expires_at: targetForm.expires_at,
+    })
+    Object.assign(targetForm, { name: '', base_url: '', allowed_hosts: '', expires_at: '' })
+    await loadPoc()
+  } catch (e) {
+    pocResult.value = `新增失败：${errorMessage(e)}`
+  }
+}
+
+async function probeTarget(row: Record<string, unknown>): Promise<void> {
+  try {
+    const res = await api.post<Record<string, unknown>>(`/api/poc-targets/${row.id}/probe`)
+    pocResult.value = `探测 #${row.id}：${JSON.stringify(res)}`
+  } catch (e) {
+    pocResult.value = `探测失败：${errorMessage(e)}`
+  }
+}
+
+async function removeTarget(row: Record<string, unknown>): Promise<void> {
+  try {
+    await api.del(`/api/poc-targets/${row.id}`)
+    await loadPoc()
+  } catch (e) {
+    pocResult.value = `删除失败：${errorMessage(e)}`
+  }
 }
 
 async function loadNotifications(): Promise<void> {
@@ -606,6 +738,11 @@ async function loadCodeql(): Promise<void> {
         codeql_build_command: cfg.value.codeql_build_command ?? '',
         timeout: Number(cfg.value.codeql_timeout_s || 1800),
         cache: (cfg.value.codeql_db_cache ?? 'true') !== 'false',
+        auto_install: (cfg.value.codeql_auto_install ?? 'false') === 'true',
+        license_ack: (cfg.value.codeql_license_ack ?? 'false') === 'true',
+        version: cfg.value.codeql_version || '2.27.2',
+        sha256: cfg.value.codeql_sha256 ?? '',
+        install_dir: cfg.value.codeql_install_dir ?? '',
       })
     }
     codeqlStatus.value = status.status === 'fulfilled' ? status.value : null
@@ -627,6 +764,11 @@ async function saveCodeql(): Promise<void> {
         codeql_build_command: codeql.codeql_build_command,
         codeql_timeout_s: String(codeql.timeout),
         codeql_db_cache: codeql.cache ? 'true' : 'false',
+        codeql_auto_install: codeql.auto_install ? 'true' : 'false',
+        codeql_license_ack: codeql.license_ack ? 'true' : 'false',
+        codeql_version: codeql.version,
+        codeql_sha256: codeql.sha256,
+        codeql_install_dir: codeql.install_dir,
       },
     })
     ElMessage.success('CodeQL 配置已保存')
@@ -635,6 +777,25 @@ async function saveCodeql(): Promise<void> {
     codeqlResult.value = { ok: false, text: `保存失败：${errorMessage(e)}` }
   } finally {
     codeqlSaving.value = false
+  }
+}
+
+async function installCodeql(): Promise<void> {
+  codeqlInstalling.value = true
+  codeqlResult.value = null
+  try {
+    const res = await api.post<Record<string, unknown>>('/api/engines/codeql/install', {
+      version: codeql.version, license_ack: codeql.license_ack, sha256: codeql.sha256,
+    })
+    codeqlResult.value = {
+      ok: Boolean(res.ok),
+      text: res.ok ? `安装完成：${res.binary}` : `安装失败：${String(res.error || '')}`,
+    }
+    if (res.ok) await loadCodeql()
+  } catch (e) {
+    codeqlResult.value = { ok: false, text: `安装失败：${errorMessage(e)}` }
+  } finally {
+    codeqlInstalling.value = false
   }
 }
 

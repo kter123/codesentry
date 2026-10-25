@@ -84,6 +84,9 @@ export interface FindingDetail extends GraphFinding {
   poc_path?: string
   entry_url?: string
   path_id?: number | null
+  fix_patch?: string
+  fix_summary?: string
+  fix_tests?: string[]
   execution_log?: string
   verification_method?: string
   verification_nonce?: string

@@ -158,9 +158,17 @@ class DependencyManager:
                 env["MYSQL_DATABASE"] = _db_name(self.root, "mysql")
             elif kind == "postgres":
                 env["POSTGRES_DB"] = _db_name(self.root, "postgres")
+            volumes = None
+            if kind == "mysql":
+                sql_dir = self.root / "sql"
+                if sql_dir.is_dir() and any(sql_dir.glob("*.sql")):
+                    volumes = {str(sql_dir.resolve()): {
+                        "bind": "/docker-entrypoint-initdb.d", "mode": "ro",
+                    }}
             container = self.client.containers.run(
                 image,
                 name=self._name(kind),
+                volumes=volumes,
                 detach=True,
                 network=self.network,
                 network_aliases=[kind],

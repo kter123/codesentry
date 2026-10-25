@@ -570,6 +570,34 @@ ALTER TABLE {BUSINESS_SCHEMA}.findings ADD COLUMN IF NOT EXISTS fix_patch TEXT N
 ALTER TABLE {BUSINESS_SCHEMA}.findings ADD COLUMN IF NOT EXISTS fix_summary TEXT NOT NULL DEFAULT '';
 ALTER TABLE {BUSINESS_SCHEMA}.findings ADD COLUMN IF NOT EXISTS fix_tests JSONB NOT NULL DEFAULT '[]';
 
+-- 增量路径 finding：同一 scan/path 只保留一条
+DELETE FROM {BUSINESS_SCHEMA}.findings a
+USING {BUSINESS_SCHEMA}.findings b
+WHERE a.id > b.id AND a.scan_id = b.scan_id
+  AND a.path_id IS NOT NULL AND a.path_id = b.path_id;
+CREATE UNIQUE INDEX IF NOT EXISTS findings_scan_path_uidx
+    ON {BUSINESS_SCHEMA}.findings (scan_id, path_id) WHERE path_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.verification_runs (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT NOT NULL,
+    finding_id BIGINT,
+    path_id BIGINT,
+    cwe INT NOT NULL DEFAULT 0,
+    language TEXT NOT NULL DEFAULT '',
+    harness_code TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    verdict TEXT NOT NULL DEFAULT '',
+    exit_code INT,
+    stdout TEXT NOT NULL DEFAULT '',
+    stderr TEXT NOT NULL DEFAULT '',
+    evidence JSONB NOT NULL DEFAULT '{{}}',
+    duration_ms INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS verification_runs_scan_idx
+    ON {BUSINESS_SCHEMA}.verification_runs (scan_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.review_comments (
     id BIGSERIAL PRIMARY KEY,
     scan_id BIGINT NOT NULL REFERENCES {BUSINESS_SCHEMA}.scans(id) ON DELETE CASCADE,

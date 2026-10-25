@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -58,6 +59,37 @@ def route_audit(state: dict):
     return "triage"
 
 
+def _persist_live_finding(scan_id: int, finding: dict) -> None:
+    finding = {**finding, "path_id": finding.get("path_id")}
+    if not scan_id or not finding.get("path_id"):
+        return
+    try:
+        from codesentry.db.pool import get_conn
+
+        taint = {**(finding.get("taint_metadata") or {}), "live": True}
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO findings (scan_id, rule_id, cwe, severity, confidence, file,"
+                " line, message, engine, taint_metadata, path_id, verdict)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'candidate')"
+                " ON CONFLICT (scan_id, path_id) WHERE path_id IS NOT NULL"
+                " DO UPDATE SET rule_id=EXCLUDED.rule_id, cwe=EXCLUDED.cwe,"
+                " severity=EXCLUDED.severity, confidence=EXCLUDED.confidence,"
+                " file=EXCLUDED.file, line=EXCLUDED.line, message=EXCLUDED.message,"
+                " engine=EXCLUDED.engine, taint_metadata=EXCLUDED.taint_metadata,"
+                " verdict='candidate'",
+                (int(scan_id), finding.get("rule_id"), int(finding.get("cwe") or 610),
+                 str(finding.get("severity") or "medium"),
+                 float(finding.get("confidence") or 0.5), str(finding.get("file") or ""),
+                 max(1, int(finding.get("line") or 1)), str(finding.get("message") or "")[:500],
+                 str(finding.get("engine") or "agent"), json.dumps(taint),
+                 int(finding["path_id"])),
+            )
+            conn.commit()
+    except Exception:  # noqa: BLE001, S110 - 实时落库失败不影响路径审计
+        pass
+
+
 def run_audit_path(state: dict, runtime=None) -> dict:
     from codesentry.agents.path_audit import run_path_audit
     from codesentry.control.audit_paths import finish_path
@@ -74,11 +106,19 @@ def run_audit_path(state: dict, runtime=None) -> dict:
                 path = {**path, "file": entry.get("path"), "line": entry.get("start")}
         except Exception:  # noqa: BLE001, S110
             pass
+    reason = str(result.get("reason") or "")
     status = {
         "finding": "finding", "clean": "clean", "blocked": "blocked",
         "need_more": "pending",
     }.get(str(result.get("verdict")), "pending")
+    if status == "pending" and "超时" in reason:
+        status = "timeout"
+    elif status == "pending" and ("审计失败" in reason or "失败：" in reason):
+        status = "error"
     finding = _to_finding(path, result) if status == "finding" else None
+    if finding:
+        finding["path_id"] = path.get("id")
+        _persist_live_finding(int(state.get("scan_id") or 0), finding)
     finish_path(int(path.get("id") or 0), status,
                 {**result, "finding_id": None,
                  "finding": finding} if finding else result)

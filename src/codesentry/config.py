@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     poc_remote_enabled: bool = False
     poc_remote_allow_private: bool = False
+    harness_image: str = "python:3.12-slim"
+    harness_timeout_s: int = 90
+    harness_allow_network: bool = False
+    harness_pull_policy: Literal["never", "missing", "always"] = "missing"
     scheduler_interval_s: int = 30
 
     # llm (D5, D14)

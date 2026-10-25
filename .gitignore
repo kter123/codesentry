@@ -22,3 +22,5 @@ bench/external/
 CodeScan-Artex/
 kvf-admin-master.zip
 *.tsbuildinfo
+
+DeepAudit/

@@ -180,6 +180,17 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
                                           verification_method, verification_nonce, confidence_parts, tool_trace,
                                           path_id, entry_url)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (scan_id, path_id) WHERE path_id IS NOT NULL
+                    DO UPDATE SET rule_id=EXCLUDED.rule_id, cwe=EXCLUDED.cwe,
+                        severity=EXCLUDED.severity, confidence=EXCLUDED.confidence,
+                        file=EXCLUDED.file, line=EXCLUDED.line, message=EXCLUDED.message,
+                        engine=EXCLUDED.engine, taint_metadata=EXCLUDED.taint_metadata,
+                        exploit_chain=EXCLUDED.exploit_chain, poc_path=EXCLUDED.poc_path,
+                        verdict=EXCLUDED.verdict, execution_log=EXCLUDED.execution_log,
+                        verification_method=EXCLUDED.verification_method,
+                        verification_nonce=EXCLUDED.verification_nonce,
+                        confidence_parts=EXCLUDED.confidence_parts,
+                        tool_trace=EXCLUDED.tool_trace, entry_url=EXCLUDED.entry_url
                     """,
                     (
                         scan_id, tf.get("rule_id"), tf.get("cwe"), tf.get("severity"),
