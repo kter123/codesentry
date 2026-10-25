@@ -380,7 +380,7 @@ onMounted(() => {
 
 .flow-node {
   border: 1px solid var(--cs-border);
-  background: #f8fafc;
+  background: var(--cs-panel-soft);
   border-radius: 10px;
   padding: 10px 14px;
   min-width: 96px;

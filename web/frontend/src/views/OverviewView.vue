@@ -10,6 +10,30 @@
       </template>
     </page-header>
 
+    <div class="hero-console">
+      <div>
+        <div class="hero-kicker">Graph Audit Console / LangGraph Runtime</div>
+        <h1 class="hero-title">把代码变成<span>可审路径</span>，<br />让 Agent 沿着图去验证。</h1>
+        <p class="hero-copy">
+          代码图是事实源；引擎、工具、RAG、Harness 只提供证据。Supervisor 调度路径审计、
+          工具取证与沙箱验证，过程实时可见。
+        </p>
+        <div class="hero-actions">
+          <el-button type="primary" @click="$router.push('/instant')">即时分析</el-button>
+          <el-button @click="$router.push('/scans')">新建扫描</el-button>
+          <el-button v-if="latestScan" plain @click="openWorkbench">打开最近工作台</el-button>
+        </div>
+      </div>
+      <div class="hero-terminal">
+        <div><span class="prompt">$</span> codesentry status</div>
+        <div>graph ....... <span class="ok">READY</span> (tree-sitter · 6 languages)</div>
+        <div>engines ..... <span class="ok">SEMGREP · CODEQL · JOERN</span></div>
+        <div>runtime ..... <span class="ok">LANGGRAPH / SUPERVISOR</span></div>
+        <div>verification  <span class="warn">HARNESS · SANDBOX</span></div>
+        <div><span class="prompt">$</span> queue: {{ health?.queue?.running_scans ?? 0 }} running · {{ scans.length }} scans</div>
+      </div>
+    </div>
+
     <div class="stat-grid">
       <div class="stat-card">
         <span class="stat-label">数据库</span>
@@ -191,6 +215,7 @@ interface ReviewRow {
 
 const router = useRouter()
 const loading = ref(false)
+const latestScan = computed(() => scans.value[0] || null)
 const health = ref<Health | null>(null)
 
 function engineFound(name: string, path: string): boolean {
@@ -218,6 +243,10 @@ const errorText = computed(() => sectionErrors.health)
 
 function openScan(row: ScanRow): void {
   void router.push(`/scans/${row.id}`)
+}
+
+function openWorkbench(): void {
+  if (latestScan.value) void router.push(`/scans/${latestScan.value.id}/workbench`)
 }
 
 async function load(): Promise<void> {

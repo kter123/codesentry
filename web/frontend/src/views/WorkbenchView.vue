@@ -71,7 +71,15 @@
               v-for="event in filteredEvents"
               :key="`${event.seq}-${event.event_type}`"
               class="event-row"
-              :class="{ active: selectedEvent?.seq === event.seq }"
+              :class="{
+                active: selectedEvent?.seq === event.seq,
+                'event-finding': event.event_type.includes('finding') || event.event_type.includes('verified'),
+                'event-tool': event.event_type.includes('tool'),
+                'event-verify': event.event_type.includes('verification'),
+                'event-path': event.event_type.includes('path'),
+                'event-error': event.event_type.includes('error') || event.event_type.includes('timeout'),
+                'event-supervisor': event.event_type.includes('supervisor'),
+              }"
               @click="selectedEvent = event"
             >
               <div class="event-meta">
@@ -465,10 +473,18 @@ onUnmounted(() => {
   background: rgba(37, 99, 235, 0.08);
 }
 .event-row {
-  padding: 7px 6px;
+  padding: 7px 8px;
   border-bottom: 1px solid var(--cs-border);
+  border-left: 2px solid transparent;
   cursor: pointer;
+  font-family: var(--cs-mono);
 }
+.event-row.event-finding { border-left-color: var(--cs-red); background: rgba(239,68,68,.035); }
+.event-row.event-tool { border-left-color: var(--cs-cyan); }
+.event-row.event-verify { border-left-color: var(--cs-green); background: rgba(34,197,94,.035); }
+.event-row.event-path { border-left-color: var(--cs-accent); }
+.event-row.event-error { border-left-color: var(--cs-red); background: rgba(239,68,68,.07); }
+.event-row.event-supervisor { border-left-color: var(--cs-purple); background: rgba(167,139,250,.035); }
 .event-row.active {
   background: rgba(37, 99, 235, 0.08);
 }

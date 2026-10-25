@@ -12,10 +12,13 @@
         :collapse-transition="false"
         router
       >
-        <el-menu-item v-for="item in menuItems" :key="item.path" :index="item.path">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <template #title>{{ item.label }}</template>
-        </el-menu-item>
+        <template v-for="group in menuGroups" :key="group.label">
+          <div v-if="!isCollapse" class="menu-group-label">{{ group.label }}</div>
+          <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.label }}</template>
+          </el-menu-item>
+        </template>
       </el-menu>
     </el-aside>
 
@@ -32,6 +35,12 @@
           <el-breadcrumb-item v-if="route.meta.title">{{ route.meta.title }}</el-breadcrumb-item>
         </el-breadcrumb>
         <div class="header-spacer" />
+        <el-tag size="small" type="success" effect="dark" class="live-tag">
+          <span class="live-dot" /> {{ healthLabel }}
+        </el-tag>
+        <el-button text circle :aria-label="theme === 'dark' ? '切换浅色' : '切换深色'" @click="toggleTheme">
+          <el-icon :size="17"><Sunny v-if="theme === 'dark'" /><Moon v-else /></el-icon>
+        </el-button>
         <el-tag v-if="!auth.authEnabled" size="small" type="info">本地模式</el-tag>
         <el-dropdown trigger="click" @command="onCommand">
           <span class="user-trigger">
@@ -75,11 +84,13 @@ import {
   Expand,
   Fold,
   MagicStick,
+  Moon,
   Odometer,
   Search,
   SetUp,
   Setting,
   Share,
+  Sunny,
   Tickets,
   User,
 } from '@element-plus/icons-vue'
@@ -90,24 +101,41 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const isCollapse = ref(false)
+const theme = ref<'dark' | 'light'>('light')
+const healthLabel = ref('CONNECTED')
 
-const menuItems = [
-  { path: '/', label: '概览', icon: Odometer },
-  { path: '/instant', label: '即时分析', icon: Lightning },
-  { path: '/scans', label: '扫描管理', icon: Search },
-  { path: '/projects', label: '项目与定时', icon: Calendar },
-  { path: '/reviews', label: '复核队列', icon: DocumentChecked },
-  { path: '/agents', label: 'Agent 管理', icon: Cpu },
-  { path: '/llm', label: 'LLM 配置', icon: Connection },
-  { path: '/usage', label: '用量与配额', icon: DataLine },
-  { path: '/prompts', label: 'Prompt 管理', icon: EditPen },
-  { path: '/skills', label: 'Skills 管理', icon: MagicStick },
-  { path: '/kb', label: '知识库', icon: Collection },
-  { path: '/rules', label: '规则管理', icon: SetUp },
-  { path: '/orchestration', label: '编排模板', icon: Share },
-  { path: '/audit', label: '配置审计', icon: Tickets },
-  { path: '/settings', label: '全局设置', icon: Setting },
-  { path: '/users', label: '用户与 Token', icon: User },
+const menuGroups = [
+  {
+    label: 'Workspace',
+    items: [
+      { path: '/', label: '概览', icon: Odometer },
+      { path: '/instant', label: '即时分析', icon: Lightning },
+      { path: '/scans', label: '扫描管理', icon: Search },
+      { path: '/projects', label: '项目与定时', icon: Calendar },
+      { path: '/reviews', label: '复核队列', icon: DocumentChecked },
+    ],
+  },
+  {
+    label: 'Control Plane',
+    items: [
+      { path: '/agents', label: 'Agent 管理', icon: Cpu },
+      { path: '/llm', label: 'LLM 配置', icon: Connection },
+      { path: '/usage', label: '用量与配额', icon: DataLine },
+      { path: '/prompts', label: 'Prompt 管理', icon: EditPen },
+      { path: '/skills', label: 'Skills 管理', icon: MagicStick },
+      { path: '/kb', label: '知识库', icon: Collection },
+      { path: '/rules', label: '规则管理', icon: SetUp },
+      { path: '/orchestration', label: '编排模板', icon: Share },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { path: '/audit', label: '配置审计', icon: Tickets },
+      { path: '/settings', label: '全局设置', icon: Setting },
+      { path: '/users', label: '用户与 Token', icon: User },
+    ],
+  },
 ]
 
 const activeMenu = computed(() => {
@@ -127,6 +155,16 @@ function toggle(): void {
   isCollapse.value = !isCollapse.value
 }
 
+function applyTheme(value: 'dark' | 'light'): void {
+  theme.value = value
+  document.documentElement.dataset.theme = value
+  localStorage.setItem('codesentry.theme', value)
+}
+
+function toggleTheme(): void {
+  applyTheme(theme.value === 'dark' ? 'light' : 'dark')
+}
+
 async function onCommand(command: string): Promise<void> {
   if (command === 'settings') {
     await router.push('/settings')
@@ -139,6 +177,12 @@ async function onCommand(command: string): Promise<void> {
 }
 
 onMounted(() => {
+  const stored = localStorage.getItem('codesentry.theme')
+  applyTheme(stored === 'dark' ? 'dark' : 'light')
   if (window.innerWidth < 900) isCollapse.value = true
+  void fetch('/api/health')
+    .then((r) => (r.ok ? 'CONNECTED' : 'DEGRADED'))
+    .catch(() => 'OFFLINE')
+    .then((label) => { healthLabel.value = label })
 })
 </script>

@@ -1102,7 +1102,7 @@ onUnmounted(() => {
   border: 1px solid var(--cs-border);
   border-radius: 10px;
   padding: 12px 14px;
-  background: #fff;
+  background: var(--cs-panel);
 }
 
 .timeline-head {
