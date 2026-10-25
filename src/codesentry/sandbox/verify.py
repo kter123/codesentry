@@ -44,7 +44,7 @@ class CanaryVerifier:
     def _container(self):
         import docker
 
-        client = docker.from_env()
+        client = docker.DockerClient.from_env()
         return client, client.containers.get(self.container_name)
 
     def _exec(self, script: str) -> str:

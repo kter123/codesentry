@@ -146,7 +146,7 @@ def cleanup_target_images() -> int:
     try:
         import docker
 
-        client = docker.from_env(timeout=30)
+        client = docker.DockerClient.from_env(timeout=30)  # type: ignore[attr-defined]
         in_use = {c.image.id for c in client.containers.list(all=True)}
         removed = 0
         for image in client.images.list():

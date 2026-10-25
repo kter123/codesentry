@@ -159,7 +159,7 @@ def local_java_image() -> str | None:
     try:
         import docker
 
-        client = docker.from_env(timeout=15)
+        client = docker.DockerClient.from_env(timeout=15)  # type: ignore[attr-defined]
         tags = [tag for image in client.images.list() for tag in (image.tags or [])]
         client.close()
     except Exception:  # noqa: BLE001
@@ -274,7 +274,7 @@ class DockerDeployer:
     def _client(self):
         import docker
 
-        client = docker.from_env(timeout=max(180, self.timeout_s + 90))
+        client = docker.DockerClient.from_env(timeout=max(180, self.timeout_s + 90))
         client.ping()
         return client
 
@@ -530,7 +530,7 @@ def cleanup_scan(scan_id: int) -> None:
     try:
         import docker
 
-        client = docker.from_env(timeout=120)
+        client = docker.DockerClient.from_env(timeout=120)  # type: ignore[attr-defined]
         try:
             c = client.containers.get(f"codesentry-target-{scan_id}")
             c.stop(timeout=5)

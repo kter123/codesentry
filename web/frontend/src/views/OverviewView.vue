@@ -71,6 +71,18 @@
     </div>
 
     <div class="panel">
+      <h2 class="panel-title">审计质量 <span class="panel-subtitle">来自 findings / audit_paths / verification_runs</span></h2>
+      <div class="stat-grid" v-if="dash">
+        <div class="stat-card"><span class="stat-label">verified</span><span class="stat-value">{{ dash.by_verdict?.verified ?? 0 }}</span><span class="stat-hint">Harness/路径验证通过</span></div>
+        <div class="stat-card"><span class="stat-label">plausible</span><span class="stat-value">{{ dash.by_verdict?.plausible ?? 0 }}</span><span class="stat-hint">证据闭合但未触发</span></div>
+        <div class="stat-card"><span class="stat-label">rejected</span><span class="stat-value">{{ dash.by_verdict?.rejected ?? 0 }}</span><span class="stat-hint">不可达/净化</span></div>
+        <div class="stat-card"><span class="stat-label">已审路径</span><span class="stat-value">{{ dash.paths?.finding ?? 0 }}</span><span class="stat-hint">路径 finding</span></div>
+        <div class="stat-card"><span class="stat-label">Harness</span><span class="stat-value">{{ dash.verified_runs ?? 0 }}</span><span class="stat-hint">verified runs</span></div>
+      </div>
+      <el-empty v-else :image-size="50" description="暂无审计质量数据" />
+    </div>
+
+    <div class="panel">
       <h2 class="panel-title">
         最近扫描
         <span class="panel-subtitle">点击行查看时间线与 findings</span>
@@ -194,6 +206,7 @@ function engineLabel(name: string, path: string): string {
 const scans = ref<ScanRow[]>([])
 const reviews = ref<ReviewRow[]>([])
 const usage = ref<UsageRow[]>([])
+const dash = ref<Record<string, any> | null>(null)
 const sectionErrors = reactive<Record<'health' | 'scans' | 'reviews' | 'usage', string>>({
   health: '',
   scans: '',
@@ -212,11 +225,12 @@ async function load(): Promise<void> {
   for (const key of Object.keys(sectionErrors) as Array<keyof typeof sectionErrors>) {
     sectionErrors[key] = ''
   }
-  const [h, s, r, u] = await Promise.allSettled([
+  const [h, s, r, u, d] = await Promise.allSettled([
     api.get<Health>('/api/health'),
     api.get<ScanRow[]>('/api/scans'),
     api.get<{ queue: ReviewRow[] }>('/api/reviews'),
     api.get<{ rows: UsageRow[] }>('/api/usage/summary', { group_by: 'agent' }),
+    api.get<Record<string, unknown>>('/api/dashboard'),
   ])
   if (h.status === 'fulfilled') health.value = h.value
   else sectionErrors.health = `健康检查失败：${errorMessage(h.reason)}`
@@ -226,6 +240,7 @@ async function load(): Promise<void> {
   else sectionErrors.reviews = `复核队列加载失败：${errorMessage(r.reason)}`
   if (u.status === 'fulfilled') usage.value = u.value?.rows ?? []
   else sectionErrors.usage = `用量加载失败：${errorMessage(u.reason)}`
+  dash.value = d.status === 'fulfilled' ? (d.value as Record<string, any>) : null
   loading.value = false
 }
 

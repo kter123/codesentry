@@ -86,6 +86,16 @@ def _persist_live_finding(scan_id: int, finding: dict) -> None:
                  int(finding["path_id"])),
             )
             conn.commit()
+        try:
+            from codesentry.orchestrator.events import publish_event
+
+            publish_event(scan_id, "finding.candidate", agent="audit", phase="path_audit",
+                          payload={"rule_id": finding.get("rule_id"),
+                                   "cwe": finding.get("cwe"),
+                                   "path_id": finding.get("path_id"),
+                                   "severity": finding.get("severity")})
+        except Exception:  # noqa: BLE001, S110
+            pass
     except Exception:  # noqa: BLE001, S110 - 实时落库失败不影响路径审计
         pass
 
@@ -122,6 +132,15 @@ def run_audit_path(state: dict, runtime=None) -> dict:
     finish_path(int(path.get("id") or 0), status,
                 {**result, "finding_id": None,
                  "finding": finding} if finding else result)
+    try:
+        from codesentry.orchestrator.events import publish_event
+
+        publish_event(int(state.get("scan_id") or 0), "path.audited", agent="audit",
+                      phase="path_audit",
+                      payload={"path_id": path.get("id"), "status": status,
+                               "reason": reason[:200]})
+    except Exception:  # noqa: BLE001, S110
+        pass
     return {
         "path_results": [{"path_id": path.get("id"), "status": status,
                           "finding": finding, "verdict": result.get("verdict")}],

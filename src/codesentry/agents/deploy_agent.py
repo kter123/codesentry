@@ -209,7 +209,7 @@ class DeploySession:
     def _client(self):
         import docker
 
-        return docker.from_env(timeout=max(300, int(self.settings.deploy_timeout_s) + 180))
+        return docker.DockerClient.from_env(timeout=max(300, int(self.settings.deploy_timeout_s) + 180))
 
     def docker_build(self) -> str:
         if not (self.build_dir / "Dockerfile").is_file():

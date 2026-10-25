@@ -65,7 +65,7 @@ def run_harness(code: str, language: str, *, image: str = "",
     try:
         import docker
 
-        client = docker.from_env(timeout=max(120, timeout_s + 60))
+        client = docker.DockerClient.from_env(timeout=max(120, timeout_s + 60))  # type: ignore[attr-defined]
         if not ensure_image(client, image, pull_policy):
             return {"status": "environment_error", "verdict": "plausible",
                     "exit_code": None, "stdout": "", "stderr": f"镜像不可用：{image}",
@@ -261,6 +261,16 @@ def verify_finding(finding_id: int) -> dict:
                    generated["language"], generated["code"], result,
                    {"summary": generated["summary"], "payloads": generated["payloads"],
                     "reason": result.get("reason")})
+    try:
+        from codesentry.orchestrator.events import publish_event
+
+        publish_event(int(scan_id), "verification.result", agent="verification",
+                      phase="harness",
+                      payload={"finding_id": finding_id, "verdict": result.get("verdict"),
+                               "status": result.get("status"), "run_id": rid,
+                               "language": generated["language"]})
+    except Exception:  # noqa: BLE001, S110
+        pass
     if result.get("verdict") in ("verified", "rejected", "plausible"):
         try:
             with get_conn() as conn, conn.cursor() as cur:

@@ -48,7 +48,7 @@ def test_generate_harness():
 
 
 def test_run_harness_verified(monkeypatch):
-    monkeypatch.setattr("docker.from_env", lambda **k: _Client())
+    monkeypatch.setattr("docker.DockerClient.from_env", lambda **k: _Client())
     monkeypatch.setattr("codesentry.sandbox.deploy.ensure_image",
                         lambda c, i, p="missing": True)
     out = harness.run_harness("print('HARNESS_VERIFIED')", "python",
@@ -59,7 +59,7 @@ def test_run_harness_verified(monkeypatch):
 
 
 def test_run_harness_environment_error(monkeypatch):
-    monkeypatch.setattr("docker.from_env", lambda **k: _Client())
+    monkeypatch.setattr("docker.DockerClient.from_env", lambda **k: _Client())
     monkeypatch.setattr("codesentry.sandbox.deploy.ensure_image",
                         lambda c, i, p="missing": False)
     out = harness.run_harness("print(1)", "python", image="missing", pull_policy="never")

@@ -1063,7 +1063,7 @@ def _health_sync() -> dict:
     try:
         import docker
 
-        client = docker.from_env()
+        client = docker.DockerClient.from_env()  # type: ignore[attr-defined]
         docker_info = {"ok": True, "version": client.version().get("Version", "")}
         client.close()
     except Exception:  # noqa: BLE001, S110

@@ -47,12 +47,13 @@
 - `mypy`：122 source files，无问题
 - 前端 `npm run build`：通过
 - Playwright：**21/21** 路由通过（含工作台、即时分析、路径抽屉）
+- 统一框架 Java 合成链路：scan `1730` `done`，4 findings、10 paths、49 agent_events、19 agent_nodes；证明 Supervisor/事件/实时 finding 在主链生效。
 
 ## 未完成/限制
 
-- Harness 全语言统一镜像未构建；当前 `harness_image` 可配置，默认 Python 镜像真实可用；其他语言需镜像包含运行时，否则 `environment_error/plausible`。
+- Harness 全语言统一镜像未完成：已提供 `docker/harness/Dockerfile`，但本机 Docker 构建等待 apt 网络超时；当前用 Python 镜像真实验证。其他语言需镜像包含运行时，否则 `environment_error/plausible`。
 - 工具网关二进制可能未安装（Gitleaks/Bandit/OSV/Safety），不可用时返回 `unavailable`，不阻断扫描。
 - `agent_nodes` 目前由 node_runs/telemetry 生成，父子层级为扁平 root；后续可细化 handoff 树。
 - 暂停只在节点边界生效；长 LLM 节点需等当前节点结束。
-- JVWA 重扫与 kvf ready 未在本轮执行（数据已清空）。
+- JVWA 全量扫描尝试在 CodeQL Java 建库阶段长时间无进展后停止；改用小 Java 合成项目完成统一链路验证。kvf ready 仍未执行。
 - 全量事件回放 UI 是轮询/SSE 增量，未做时间轴拖拽。
