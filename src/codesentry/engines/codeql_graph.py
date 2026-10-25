@@ -48,7 +48,8 @@ def parse_codeql_flows(doc: dict, repo: str) -> list[dict]:
     return edges
 
 
-def run_codeql_graph(sarif_path: str, repo: str, project: str) -> dict:
+def run_codeql_graph(sarif_path: str, repo: str, project: str,
+                     *, build_id: int = 0) -> dict:
     try:
         doc = json.loads(Path(sarif_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -59,24 +60,48 @@ def run_codeql_graph(sarif_path: str, repo: str, project: str) -> dict:
     from codesentry.rag.graph_delta import apply_engine_graph, resolve_node_key
 
     ensure_control_schema()
+    sink_map: dict[tuple[str, int], str] = {}
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT path, start_line, node_key FROM graph_nodes"
+                " WHERE project=%s AND kind='sink'",
+                (project,),
+            )
+            sink_map = {(str(r[0]), int(r[1])): str(r[2]) for r in cur.fetchall()}
+    except Exception:  # noqa: BLE001
+        sink_map = {}
     edges = []
+    nodes = []
     for item in raw[:5000]:
         src = resolve_node_key(project, item["src_path"], item["src_line"], "source")
         dst = resolve_node_key(project, item["dst_path"], item["dst_line"], "sink")
+        sink_key = sink_map.get((item["dst_path"], item["dst_line"]))
+        if sink_key:
+            dst = sink_key
+        elif src == dst:
+            # 同一函数内的 source→sink：用独立 sink 占位节点，避免自环被丢弃
+            dst = f"sink:{item['dst_path']}#codeql:{item['dst_line']}"
+            nodes.append({
+                "key": dst, "kind": "sink", "name": "codeql-flow-sink",
+                "path": item["dst_path"], "start": item["dst_line"],
+                "end": item["dst_line"], "attrs": {"provenance": "codeql"},
+            })
         edges.append({"src": src, "dst": dst, "kind": "dataflow",
                       "provenance": "codeql", "confidence": 0.9,
                       "attrs": {"src": item["src_path"], "src_line": item["src_line"],
                                 "dst": item["dst_path"], "dst_line": item["dst_line"]}})
-    build_id = 0
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM graph_builds WHERE project=%s ORDER BY id DESC LIMIT 1",
-                (project,),
-            )
-            row = cur.fetchone()
-        build_id = int(row[0]) if row else 0
-    except Exception:  # noqa: BLE001, S110
-        pass
-    stats = apply_engine_graph(project, build_id, [], edges) if build_id else {}
+    build_id = int(build_id or 0)
+    if not build_id:
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM graph_builds WHERE project=%s ORDER BY id DESC LIMIT 1",
+                    (project,),
+                )
+                row = cur.fetchone()
+            build_id = int(row[0]) if row else 0
+        except Exception:  # noqa: BLE001, S110
+            pass
+    stats = apply_engine_graph(project, build_id, nodes, edges) if build_id else {}
     return {"ok": True, "flows": len(raw), **stats}

@@ -23,7 +23,7 @@ def test_run_codeql_command_construction(monkeypatch, tmp_path):
         return type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})()
 
     monkeypatch.setattr(codeql.subprocess, "run", fake_run)
-    monkeypatch.setattr(codeql, "_parse_sarif", lambda path: [])
+    monkeypatch.setattr(codeql, "_parse_sarif", lambda path, repo=None: [])
     result = codeql.run_codeql(str(repo), "java", True, str(out))
     assert result.status == "ok"
     create = cmds[0]

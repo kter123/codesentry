@@ -64,6 +64,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
+  Calendar,
   Collection,
   Connection,
   Cpu,
@@ -92,6 +93,7 @@ const isCollapse = ref(false)
 const menuItems = [
   { path: '/', label: '概览', icon: Odometer },
   { path: '/scans', label: '扫描管理', icon: Search },
+  { path: '/projects', label: '项目与定时', icon: Calendar },
   { path: '/reviews', label: '复核队列', icon: DocumentChecked },
   { path: '/agents', label: 'Agent 管理', icon: Cpu },
   { path: '/llm', label: 'LLM 配置', icon: Connection },

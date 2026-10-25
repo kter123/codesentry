@@ -24,44 +24,58 @@ CODEQL_LANG = {
 }
 
 
-def _parse_sarif(path: Path) -> list[Finding]:
+def _parse_sarif(path: Path, repo: str | None = None) -> list[Finding]:
     try:
         doc = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return []
-    rules = {i: r.get("id", "unknown") for i, r in enumerate(doc.get("runs", [{}])[0].get("tool", {}).get("driver", {}).get("rules", []))}
-    rule_props = {i: (r.get("properties") or {}) for i, r in enumerate(
-        doc.get("runs", [{}])[0].get("tool", {}).get("driver", {}).get("rules", [])
-    )}
+    from codesentry.engines.codeql_graph import normalize_sarif_uri
+
     out: list[Finding] = []
     for run in doc.get("runs", []):
+        rules_list = run.get("tool", {}).get("driver", {}).get("rules", []) or []
+        rules = {i: r.get("id", "unknown") for i, r in enumerate(rules_list)}
+        rule_props = {i: (r.get("properties") or {}) for i, r in enumerate(rules_list)}
         for res in run.get("results", []):
             loc = ((res.get("locations") or [{}])[0]).get("physicalLocation", {})
             region = loc.get("region", {})
-            props = res.get("properties", {})
-            rule_id = rules.get(res.get("ruleIndex", -1), res.get("ruleId", "unknown"))
+            props = res.get("properties", {}) or {}
+            rule_index = res.get("ruleIndex", -1)
+            rule_id = rules.get(rule_index, res.get("ruleId", "unknown"))
+            rule_meta = rule_props.get(rule_index, {}) or {}
+            level = res.get("level") or rule_meta.get("problem.severity") or "warning"
             severity = {"error": "high", "warning": "medium", "note": "low"}.get(
-                str(res.get("level") or "warning").lower(), "medium"
+                str(level).lower(), "medium"
             )
             cwe = 610
-            cwe_raw = props.get("cwe") or rule_props.get(res.get("ruleIndex", -1), {}).get("cwe")
+            cwe_raw = props.get("cwe") or rule_meta.get("cwe")
             if cwe_raw is None and isinstance(res.get("rule"), dict):
                 cwe_raw = res["rule"].get("properties", {}).get("cwe")
+            if cwe_raw is None:
+                tags = rule_meta.get("tags") or []
+                if isinstance(tags, list):
+                    cwe_raw = next(
+                        (t for t in tags if "cwe" in str(t).lower()), None
+                    )
             if isinstance(cwe_raw, list):
                 cwe_raw = cwe_raw[0] if cwe_raw else None
-            match = re.search(r"CWE-(\d+)", str(cwe_raw or ""))
+            match = re.search(r"cwe[-_/]?(\d+)", str(cwe_raw or ""), re.IGNORECASE)
             if match:
                 cwe = int(match.group(1))
             line_no = int(region.get("startLine", -1))
             if line_no < 1:
                 continue
+            uri = loc.get("artifactLocation", {}).get("uri", "")
+            file_name = normalize_sarif_uri(uri, repo) if repo else str(uri)
+            if not file_name:
+                file_name = str(uri)
             out.append(
                 Finding(
                     rule_id=rule_id,
                     cwe=cwe,
                     severity=severity,  # type: ignore[arg-type]
                     confidence=0.7,
-                    file=loc.get("artifactLocation", {}).get("uri", ""),
+                    file=file_name,
                     line=line_no,
                     message=res.get("message", {}).get("text", ""),
                     engine="codeql",
@@ -134,8 +148,9 @@ def run_codeql(
     err = _run(analyze, "analyze")
     if err:
         return err
-    findings = _parse_sarif(result_sarif)
-    return EngineResult(engine="codeql", status="ok", findings=findings)
+    findings = _parse_sarif(result_sarif, repo)
+    return EngineResult(engine="codeql", status="ok", findings=findings,
+                        lang=db_lang, artifact=str(result_sarif))
 
 
 def _repo_fingerprint(repo: str) -> str:

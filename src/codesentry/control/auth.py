@@ -23,7 +23,8 @@ PUBLIC_PATHS = {"/api/auth/login", "/api/auth/logout", "/api/health", "/openapi.
 ADMIN_PREFIXES = (
     "/api/llm-profiles", "/api/agents", "/api/prompts", "/api/skills",
     "/api/rules", "/api/settings", "/api/users", "/api/api-tokens", "/api/usage",
-    "/api/ops", "/api/webhooks", "/api/config",
+    "/api/ops", "/api/webhooks", "/api/config", "/api/projects", "/api/schedules",
+    "/api/agent-presets",
 )
 ANALYST_PREFIXES = ("/api/scans", "/api/reviews")
 

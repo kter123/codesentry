@@ -29,6 +29,9 @@ def findings_to_sarif(findings: list[Finding]) -> dict:
             "cwe": f.cwe,
             "engine": f.engine,
         }
+        path_id = (f.taint_metadata or {}).get("path_id")
+        if path_id:
+            prop_block["path_id"] = path_id
         results.append(
             {
                 "ruleId": key,

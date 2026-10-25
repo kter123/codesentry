@@ -19,6 +19,11 @@
       <el-input v-model="search" placeholder="搜索节点 / 文件" clearable style="width: 220px" />
       <el-checkbox v-model="onlyFindings">仅显示 finding 相关</el-checkbox>
       <el-checkbox v-model="onlyTaint">仅显示污点边</el-checkbox>
+      <el-checkbox v-model="groupByPackage">按包聚合</el-checkbox>
+      <el-tag v-if="pathInfo" type="warning" effect="dark">
+        路径 #{{ pathInfo.id }} · {{ pathInfo.feasibility || '—' }}
+      </el-tag>
+      <el-button v-if="pathInfo" size="small" text @click="clearPath">清除高亮</el-button>
       <span class="muted">
         {{ visibleNodes.length }} / {{ graph?.nodes?.length ?? 0 }} 节点 ·
         {{ visibleEdges.length }} 边 · 构建 #{{ graph?.graph_build_id ?? '—' }}
@@ -139,29 +144,106 @@ const kindFilter = ref<string[]>([])
 const search = ref('')
 const onlyFindings = ref(false)
 const onlyTaint = ref(false)
+const groupByPackage = ref(false)
 const selectedKey = ref('')
 const neighbors = ref<GraphNode[]>([])
 const sourceSnippet = ref('')
 const truncated = ref(false)
+const pathInfo = ref<{
+  id: number
+  feasibility?: string
+  entry_key?: string
+  nodes?: string[]
+  edges?: Array<{ from?: string; to?: string; kind?: string }>
+} | null>(null)
 
-const KIND_COLORS: Record<string, string> = {
-  repo: '#334155', package: '#64748b', file: '#94a3b8', class: '#7c3aed',
-  function: '#2563eb', method: '#0ea5e9', route: '#f59e0b', endpoint: '#ef4444',
-  source: '#10b981', sink: '#dc2626', external: '#a8a29e', module: '#a8a29e',
+interface AggregatedNode extends GraphNode {
+  count?: number
+  packageDir?: string
 }
-const EDGE_COLORS: Record<string, string> = {
-  contains: '#cbd5e1', imports: '#94a3b8', calls: '#2563eb',
-  routes_to: '#f59e0b', exposes: '#ef4444', taints_to: '#dc2626',
+
+interface AggregatedEdge extends GraphEdge {
+  count?: number
 }
+
+const pathId = computed(() => Number(route.query.path_id || 0))
+const highlightNodes = computed(() => new Set(pathInfo.value?.nodes || []))
+const highlightEdges = computed(() => {
+  const set = new Set<string>()
+  for (const edge of pathInfo.value?.edges || []) {
+    const src = String(edge.from || '')
+    const dst = String(edge.to || '')
+    if (src && dst) set.add(`${src}->${dst}`)
+  }
+  return set
+})
+
+function packageOf(file?: string): string {
+  const value = String(file || '').replace(/\\/g, '/')
+  const idx = value.lastIndexOf('/')
+  return idx > 0 ? value.slice(0, idx) : '(root)'
+}
+
+const aggregated = computed<{ nodes: AggregatedNode[]; edges: AggregatedEdge[] }>(() => {
+  const nodes = graph.value?.nodes || []
+  if (!groupByPackage.value || !nodes.length) {
+    return { nodes: nodes as AggregatedNode[], edges: (graph.value?.edges || []) as AggregatedEdge[] }
+  }
+  const packages = new Map<string, AggregatedNode>()
+  const keyOf = new Map<string, string>()
+  for (const node of nodes) {
+    const dir = packageOf(node.file)
+    const key = `pkg:${dir}`
+    keyOf.set(node.key, key)
+    const existing = packages.get(key)
+    if (existing) {
+      existing.count = (existing.count || 0) + 1
+    } else {
+      packages.set(key, {
+        id: key,
+        key,
+        kind: 'package',
+        name: dir,
+        qualified_name: dir,
+        file: dir,
+        packageDir: dir,
+        count: 1,
+        findings: [],
+      })
+    }
+  }
+  const edges = new Map<string, AggregatedEdge>()
+  for (const edge of graph.value?.edges || []) {
+    const src = keyOf.get(edge.source)
+    const dst = keyOf.get(edge.target)
+    if (!src || !dst || src === dst) continue
+    const key = `${src}->${dst}:${edge.kind}`
+    const existing = edges.get(key)
+    if (existing) {
+      existing.count = (existing.count || 0) + 1
+    } else {
+      edges.set(key, {
+        source: src,
+        target: dst,
+        kind: edge.kind,
+        count: 1,
+      })
+    }
+  }
+  return { nodes: [...packages.values()], edges: [...edges.values()] }
+})
+
+const sourceNodes = computed(() => aggregated.value.nodes)
+const sourceEdges = computed(() => aggregated.value.edges)
 
 const kinds = computed(() => {
   const set = new Set<string>()
-  for (const node of graph.value?.nodes || []) set.add(node.kind)
+  for (const node of sourceNodes.value || []) set.add(node.kind)
   return [...set].sort()
 })
 
 const selected = computed(() =>
-  (graph.value?.nodes || []).find((n) => n.key === selectedKey.value) || null,
+  (sourceNodes.value || []).find((n) => n.key === selectedKey.value) || null,
 )
 
 function nodeMatches(node: GraphNode): boolean {
@@ -175,27 +257,45 @@ function nodeMatches(node: GraphNode): boolean {
   return true
 }
 
-const visibleNodes = computed(() => (graph.value?.nodes || []).filter(nodeMatches).slice(0, 800))
+const visibleNodes = computed(() => {
+  const matched = (sourceNodes.value || []).filter(nodeMatches)
+  const highlighted = matched.filter((n) => highlightNodes.value.has(n.key))
+  const others = matched.filter((n) => !highlightNodes.value.has(n.key))
+  return [...highlighted, ...others].slice(0, 800)
+})
 const visibleIds = computed(() => new Set(visibleNodes.value.map((n) => n.key)))
 const visibleEdges = computed(() =>
-  (graph.value?.edges || []).filter(
+  (sourceEdges.value || []).filter(
     (e) => visibleIds.value.has(e.source) && visibleIds.value.has(e.target)
-      && (!onlyTaint.value || e.kind === 'taints_to'),
+      && (!onlyTaint.value || groupByPackage.value || e.kind === 'taints_to'
+        || highlightEdges.value.has(`${e.source}->${e.target}`)),
   ),
 )
+
+const KIND_COLORS: Record<string, string> = {
+  repo: '#334155', package: '#475569', file: '#94a3b8', class: '#7c3aed',
+  function: '#2563eb', method: '#0ea5e9', route: '#f59e0b', endpoint: '#ef4444',
+  source: '#10b981', sink: '#dc2626', external: '#a8a29e', module: '#a8a29e',
+}
+const EDGE_COLORS: Record<string, string> = {
+  contains: '#cbd5e1', imports: '#94a3b8', calls: '#2563eb',
+  routes_to: '#f59e0b', exposes: '#ef4444', taints_to: '#dc2626',
+}
 
 function render(): void {
   if (!chartEl.value) return
   if (!chart.value) chart.value = echarts.init(chartEl.value, undefined, { renderer: 'canvas' })
-  truncated.value = (graph.value?.nodes?.length || 0) > 800 && visibleNodes.value.length >= 800
+  truncated.value = sourceNodes.value.length > 800 && visibleNodes.value.length >= 800
   const categories = kinds.value.map((kind) => ({ name: kind }))
   const categoryIndex = new Map(kinds.value.map((kind, index) => [kind, index]))
   const option: EChartsOption = {
     tooltip: {
       formatter: (params: any) => {
-        if (params.dataType === 'edge') return `${params.data.kind}`
+        if (params.dataType === 'edge') {
+          return `${params.data.kind}${params.data.count ? ` ×${params.data.count}` : ''}`
+        }
         const data = params.data || {}
-        return `${data.kind} · ${data.qualified_name || data.name || data.id}<br/>${data.file || ''}`
+        return `${data.kind} · ${data.qualified_name || data.name || data.id}<br/>${data.file || ''}${data.count ? `<br/>${data.count} 个原始节点` : ''}`
       },
     },
     legend: { data: categories.map((c) => c.name), bottom: 0, textStyle: { color: '#64748b' } },
@@ -215,49 +315,101 @@ function render(): void {
         lineStyle: { opacity: 0.55, curveness: 0.08 },
         emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
         categories,
-        data: visibleNodes.value.map((node) => ({
-          id: node.key,
-          key: node.key,
-          name: node.name || node.key,
-          category: categoryIndex.get(node.kind) ?? 0,
-          kind: node.kind,
-          qualified_name: node.qualified_name,
-          file: node.file,
-          symbolSize: node.kind === 'endpoint' ? 16 : node.findings?.length ? 18 : 10,
-          itemStyle: { color: KIND_COLORS[node.kind] || '#64748b' },
-        })),
-        links: visibleEdges.value.map((edge) => ({
-          source: edge.source,
-          target: edge.target,
-          kind: edge.kind,
-          lineStyle: { color: EDGE_COLORS[edge.kind] || '#cbd5e1' },
-        })),
+        data: visibleNodes.value.map((node) => {
+          const highlighted = highlightNodes.value.has(node.key)
+          const packageCount = Number(node.count || 0)
+          return {
+            id: node.key,
+            key: node.key,
+            name: node.name || node.key,
+            category: categoryIndex.get(node.kind) ?? 0,
+            kind: node.kind,
+            qualified_name: node.qualified_name,
+            file: node.file,
+            count: packageCount,
+            symbolSize: packageCount
+              ? Math.min(34, 14 + Math.sqrt(packageCount) * 4)
+              : node.kind === 'endpoint' ? 16 : node.findings?.length ? 18 : 10,
+            itemStyle: {
+              color: KIND_COLORS[node.kind] || '#64748b',
+              borderColor: highlighted ? '#f59e0b' : 'transparent',
+              borderWidth: highlighted ? 4 : 0,
+              opacity: pathInfo.value && !highlighted ? 0.35 : 1,
+            },
+          }
+        }),
+        links: visibleEdges.value.map((edge) => {
+          const highlighted = highlightEdges.value.has(`${edge.source}->${edge.target}`)
+          return {
+            source: edge.source,
+            target: edge.target,
+            kind: edge.kind,
+            count: edge.count,
+            lineStyle: {
+              color: highlighted ? '#f59e0b' : EDGE_COLORS[edge.kind] || '#cbd5e1',
+              width: highlighted ? 3.5 : 1,
+              opacity: pathInfo.value && !highlighted ? 0.15 : 0.55,
+            },
+          }
+        }),
       },
     ],
   }
   chart.value.setOption(option, true)
   chart.value.off('click')
   chart.value.on('click', (params: any) => {
-    if (params.dataType === 'node' && params.data?.key) void focusNode(params.data.key)
+    if (params.dataType !== 'node' || !params.data?.key) return
+    if (groupByPackage.value && params.data.kind === 'package') {
+      groupByPackage.value = false
+      search.value = String(params.data.file || '')
+      return
+    }
+    void focusNode(params.data.key)
   })
   chart.value.resize()
+}
+
+async function loadPathInfo(): Promise<void> {
+  pathInfo.value = null
+  if (!pathId.value) return
+  try {
+    pathInfo.value = await api.get<{
+      id: number
+      feasibility?: string
+      entry_key?: string
+      nodes?: string[]
+      edges?: Array<{ from?: string; to?: string; kind?: string }>
+    }>(`/api/scans/${scanId.value}/paths/${pathId.value}`)
+  } catch (e) {
+    error.value = `加载路径 ${pathId.value} 失败：${errorMessage(e)}`
+  }
 }
 
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
+    await loadPathInfo()
+    const focus = (pathInfo.value?.nodes || []).join(',')
     graph.value = await api.get<GraphPayload>(
       `/api/scans/${scanId.value}/graph`,
-      { limit: 800 },
+      { limit: 1200, focus },
     )
     if (!kindFilter.value.length) kindFilter.value = kinds.value
     render()
+    if (pathInfo.value?.entry_key) void focusNode(pathInfo.value.entry_key)
   } catch (e) {
     error.value = `加载代码图失败：${errorMessage(e)}`
   } finally {
     loading.value = false
   }
+}
+
+function clearPath(): void {
+  pathInfo.value = null
+  selectedKey.value = ''
+  void router.replace({ path: `/scans/${scanId.value}/graph` })
+  void load()
 }
 
 async function focusNode(key: string): Promise<void> {
@@ -293,7 +445,13 @@ function goScan(): void {
   void router.push(`/scans/${scanId.value}`)
 }
 
-watch([kindFilter, search, onlyFindings, onlyTaint], () => render(), { deep: true })
+watch([kindFilter, search, onlyFindings, onlyTaint, groupByPackage], () => render(), {
+  deep: true,
+})
+watch([scanId, pathId], () => {
+  kindFilter.value = []
+  void load()
+})
 
 onMounted(() => {
   void load()

@@ -44,6 +44,7 @@ from codesentry.web import (
     auth_api,  # noqa: F401
     control_api,  # noqa: F401
     graph_api,  # noqa: F401
+    projects_api,  # noqa: F401
 )
 
 WORK_ROOT = Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
@@ -175,9 +176,9 @@ def _notify(event: str, payload: dict) -> None:
 
     def run() -> None:
         try:
-            from codesentry.control.webhooks import dispatch
+            from codesentry.control.notifications import dispatch_all
 
-            dispatch(event, payload)
+            dispatch_all(event, payload)
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -267,6 +268,16 @@ async def _start_pump() -> None:
             await asyncio.sleep(0.5)
 
     asyncio.create_task(pump())
+    try:
+        from codesentry.config import get_settings
+
+        settings = get_settings()
+        if settings.scheduler_enabled:
+            from codesentry.control.scheduler import start_scheduler
+
+            start_scheduler(settings.scheduler_interval_s)
+    except Exception:  # noqa: BLE001, S110
+        pass
 
 
 @app.websocket("/ws/scans/{scan_id}")
@@ -477,22 +488,37 @@ SETTING_KEYS = {
     "codeql_build_command": "codeql",
     "codeql_timeout_s": "codeql",
     "codeql_db_cache": "codeql",
+    "smtp_host": "notifications",
+    "smtp_port": "notifications",
+    "smtp_user": "notifications",
+    "smtp_password": "notifications",
+    "smtp_from": "notifications",
+    "smtp_to": "notifications",
+    "smtp_tls": "notifications",
 }
 
 
+def _sensitive_setting(key: str) -> bool:
+    return key.endswith(("api_key", "password", "secret"))
+
+
 def _mask(key: str, val: str) -> str:
-    return (val[:8] + "…") if key.endswith("api_key") and len(val) > 8 else val
+    return (val[:8] + "…") if _sensitive_setting(key) and len(val) > 8 else val
 
 
 @app.get("/api/settings/{group}")
 async def get_settings_group(group: str) -> dict:
-    if group not in ("llm", "embedding", "codeql"):
+    if group not in ("llm", "embedding", "codeql", "notifications"):
         raise HTTPException(404)
     out: dict[str, str] = {}
     for key, g in SETTING_KEYS.items():
-        if group == "llm" and g == "embedding":
+        if group == "llm" and g != "llm":
             continue
         if group == "embedding" and g != "embedding":
+            continue
+        if group == "notifications" and g != "notifications":
+            continue
+        if group == "codeql" and g != "codeql":
             continue
         val = _read_setting(key)
         out[key] = _mask(key, val)
@@ -509,7 +535,7 @@ def _read_setting(key: str) -> str:
             row = cur.fetchone()
         if row is not None:
             val = str(row[0])
-            if key.endswith("api_key") and val:
+            if _sensitive_setting(key) and val:
                 try:
                     return decrypt_secret(val)
                 except SecretError:
@@ -533,6 +559,13 @@ def _read_setting(key: str) -> str:
         "codeql_build_command": s.codeql_build_command,
         "codeql_timeout_s": str(s.codeql_timeout_s),
         "codeql_db_cache": str(s.codeql_db_cache).lower(),
+        "smtp_host": os.environ.get("CODESENTRY_SMTP_HOST", ""),
+        "smtp_port": os.environ.get("CODESENTRY_SMTP_PORT", "587"),
+        "smtp_user": os.environ.get("CODESENTRY_SMTP_USER", ""),
+        "smtp_password": os.environ.get("CODESENTRY_SMTP_PASSWORD", ""),
+        "smtp_from": os.environ.get("CODESENTRY_SMTP_FROM", ""),
+        "smtp_to": os.environ.get("CODESENTRY_SMTP_TO", ""),
+        "smtp_tls": os.environ.get("CODESENTRY_SMTP_TLS", "true"),
     }.get(key, "")
 
 
@@ -542,13 +575,13 @@ class SettingsPayload(BaseModel):
 
 @app.put("/api/settings/{group}")
 async def put_settings_group(group: str, payload: SettingsPayload) -> dict:
-    if group not in ("llm", "embedding", "codeql"):
+    if group not in ("llm", "embedding", "codeql", "notifications"):
         raise HTTPException(404)
     for k, v in payload.values.items():
         if k not in SETTING_KEYS or SETTING_KEYS[k] != group:
             raise HTTPException(400, f"unknown key {k}")
         stored = v
-        if k.endswith("api_key") and v:
+        if _sensitive_setting(k) and v:
             from codesentry.security.secrets import encrypt_secret
 
             stored = encrypt_secret(v)
@@ -581,6 +614,12 @@ async def test_settings_group(group: str) -> dict:
                 temperature=0,
             )
             return {"ok": True, "reply_len": len(r.choices[0].message.content or "")}
+        if group == "notifications":
+            from codesentry.control.notifications import test_email
+
+            return test_email()
+        if group == "codeql":
+            return {"ok": False, "error": "CodeQL 使用 /api/engines/codeql/test"}
         from codesentry.rag.embedding import EmbeddingClient
 
         ec = EmbeddingClient.from_config()
@@ -641,6 +680,7 @@ if STATIC_DIR.exists():
     _SPA_SEGMENTS = {
         "agents", "rules", "skills", "prompts", "reviews", "scans", "review",
         "llm", "usage", "orchestration", "audit", "settings", "users", "login",
+        "projects",
     }
 
     @app.get("/{spa_path:path}")

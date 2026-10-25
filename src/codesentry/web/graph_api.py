@@ -36,10 +36,12 @@ def _scan_repo(scan_id: int) -> Path:
 
 
 @app.get("/api/scans/{scan_id}/graph")
-async def get_graph(scan_id: int, limit: int = Query(1200, ge=100, le=10000)) -> dict:
+async def get_graph(scan_id: int, limit: int = Query(1200, ge=100, le=10000),
+                    focus: str = "") -> dict:
     """真实代码图：graph_nodes/graph_edges + findings 锚定 + endpoint 资产。"""
     repo = _scan_repo(scan_id)
     project = str(repo)
+    focus_keys = [k.strip() for k in focus.split(",") if k.strip()][:500]
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, rule_id, cwe, severity, confidence, file, line, message, engine, verdict"
@@ -47,6 +49,15 @@ async def get_graph(scan_id: int, limit: int = Query(1200, ge=100, le=10000)) ->
             (scan_id,),
         )
         findings = cur.fetchall()
+        node_rows = []
+        if focus_keys:
+            cur.execute(
+                "SELECT node_key, kind, name, path, qualified_name, start_line, end_line, lang"
+                " FROM graph_nodes WHERE project=%s AND node_key = ANY(%s) LIMIT %s",
+                (project, focus_keys, limit),
+            )
+            node_rows = list(cur.fetchall())
+        seen_keys = {r[0] for r in node_rows}
         cur.execute(
             "SELECT node_key, kind, name, path, qualified_name, start_line, end_line, lang"
             " FROM graph_nodes WHERE project=%s"
@@ -55,7 +66,8 @@ async def get_graph(scan_id: int, limit: int = Query(1200, ge=100, le=10000)) ->
             " WHEN 'file' THEN 5 ELSE 6 END, id LIMIT %s",
             (project, limit),
         )
-        node_rows = cur.fetchall()
+        node_rows.extend(r for r in cur.fetchall() if r[0] not in seen_keys)
+        node_rows = node_rows[:limit]
         cur.execute(
             "SELECT src_key, dst_key, kind, provenance, confidence FROM graph_edges"
             " WHERE project=%s LIMIT %s",
@@ -160,13 +172,15 @@ async def list_scan_findings(scan_id: int) -> dict:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT id, rule_id, cwe, severity, confidence, file, line, message, engine,
-                      verdict, poc_path, verification_method, confidence_parts, tool_trace
+                      verdict, poc_path, verification_method, confidence_parts, tool_trace,
+                      path_id, entry_url
                FROM findings WHERE scan_id=%s ORDER BY id""",
             (scan_id,),
         )
         rows = cur.fetchall()
     cols = ["id", "rule_id", "cwe", "severity", "confidence", "file", "line", "message",
-            "engine", "verdict", "poc_path", "verification_method", "confidence_parts", "tool_trace"]
+            "engine", "verdict", "poc_path", "verification_method", "confidence_parts",
+            "tool_trace", "path_id", "entry_url"]
     return {"scan_id": scan_id, "findings": [dict(zip(cols, r)) for r in rows]}
 
 
@@ -176,7 +190,8 @@ async def get_finding(finding_id: int) -> dict:
         cur.execute(
             """SELECT id, scan_id, rule_id, cwe, severity, confidence, file, line, message, engine,
                       taint_metadata, exploit_chain, poc_path, verdict, execution_log,
-                      verification_method, verification_nonce, confidence_parts, tool_trace
+                      verification_method, verification_nonce, confidence_parts, tool_trace,
+                      path_id, entry_url
                FROM findings WHERE id=%s""",
             (finding_id,),
         )
@@ -185,7 +200,8 @@ async def get_finding(finding_id: int) -> dict:
             raise HTTPException(404)
     cols = ["id", "scan_id", "rule_id", "cwe", "severity", "confidence", "file", "line", "message", "engine",
             "taint_metadata", "exploit_chain", "poc_path", "verdict", "execution_log",
-            "verification_method", "verification_nonce", "confidence_parts", "tool_trace"]
+            "verification_method", "verification_nonce", "confidence_parts", "tool_trace",
+            "path_id", "entry_url"]
     return dict(zip(cols, r))
 
 
@@ -227,18 +243,53 @@ async def list_audit_paths(scan_id: int, status: str = "", round: int | None = N
 async def get_audit_path(scan_id: int, path_id: int) -> dict:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, path_key, round, kind, entry_key, source_key, sink_key, nodes,"
-            " edges, length, score, feasibility, status, finding_id, evidence"
-            " FROM audit_paths WHERE scan_id=%s AND id=%s",
+            "SELECT p.id, p.path_key, p.round, p.kind, p.entry_key, p.source_key, p.sink_key,"
+            " p.nodes, p.edges, p.length, p.score, p.feasibility, p.status, p.finding_id,"
+            " p.evidence, s.repo_path"
+            " FROM audit_paths p JOIN scans s ON s.id=p.scan_id"
+            " WHERE p.scan_id=%s AND p.id=%s",
             (scan_id, path_id),
         )
         row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, "path not found")
-    keys = ["id", "path_key", "round", "kind", "entry_key", "source_key", "sink_key",
-            "nodes", "edges", "length", "score", "feasibility", "status",
-            "finding_id", "evidence"]
-    return dict(zip(keys, row))
+        if not row:
+            raise HTTPException(404, "path not found")
+        keys = ["id", "path_key", "round", "kind", "entry_key", "source_key", "sink_key",
+                "nodes", "edges", "length", "score", "feasibility", "status",
+                "finding_id", "evidence"]
+        detail = dict(zip(keys, row[:15]))
+        project = str(Path(str(row[15])).resolve())
+        node_keys = list(detail.get("nodes") or [])
+        by_key: dict[str, dict] = {}
+        if node_keys:
+            cur.execute(
+                "SELECT node_key, kind, name, path, qualified_name, start_line, end_line,"
+                " lang, attrs FROM graph_nodes WHERE project=%s AND node_key = ANY(%s)",
+                (project, node_keys),
+            )
+            by_key = {
+                r[0]: {"key": r[0], "kind": r[1], "name": r[2], "file": r[3],
+                       "qualified_name": r[4], "start": r[5], "end": r[6],
+                       "lang": r[7], "attrs": r[8] or {}}
+                for r in cur.fetchall()
+            }
+    detail["nodes_detail"] = [
+        by_key.get(k) or {"key": k, "missing": True} for k in node_keys
+    ]
+    edges_detail = []
+    for edge in detail.get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        src = str(edge.get("from") or "")
+        dst = str(edge.get("to") or "")
+        edges_detail.append({
+            **edge, "src": src, "dst": dst,
+            "src_kind": (by_key.get(src) or {}).get("kind", ""),
+            "dst_kind": (by_key.get(dst) or {}).get("kind", ""),
+            "src_name": (by_key.get(src) or {}).get("name", src),
+            "dst_name": (by_key.get(dst) or {}).get("name", dst),
+        })
+    detail["edges_detail"] = edges_detail
+    return detail
 
 
 @app.get("/api/scans/{scan_id}/coverage")

@@ -38,6 +38,18 @@ def select_engines(OSS: bool, lang: str | None = None) -> list[str]:
     return ["joern", "semgrep"]
 
 
+def codeql_langs(languages: list[str]) -> list[str]:
+    """CodeQL 支持的语言归一：ts→javascript，去重，排除 php/未知。"""
+    from codesentry.engines.codeql import CODEQL_LANG
+
+    out: list[str] = []
+    for lang in languages or []:
+        db_lang = CODEQL_LANG.get(str(lang).lower())
+        if db_lang and db_lang not in out:
+            out.append(db_lang)
+    return out
+
+
 def detect_languages(repo: str) -> list[str]:
     """极简 recon：按扩展名推断语言出现（M3 ReconAgent 深化）。"""
     repo_path = Path(repo)

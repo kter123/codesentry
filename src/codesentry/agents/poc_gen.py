@@ -24,14 +24,85 @@ HTTP_CWES = {918, 79, 89, 611, 352, 77, 113}
 POC_VERDICTS = ("verified", "plausible", "false_positive")
 
 _DEFAULT_SYSTEM = (
-    "你是 PoCGenAgent。基于 finding 与证据生成：①利用链路步骤列表（source→传播→sink）；"
+    "你是 PoCGenAgent。基于 finding、证据与 path_context 生成：①利用链路步骤列表（source→传播→sink）；"
     "②可执行的内容——HTTP 类给 curl 命令序列；本地类给 python/注入点调用样例。"
-    "证据里的 graph_chain 是代码图给出的真实调用/污点边，必须优先遵循；"
-    "不得编造图中不存在的调用链。"
+    "证据里的 graph_chain 是代码图给出的真实调用/污点边，path_context 给出真实入口 method/route，必须优先遵循；"
+    "不得编造图中不存在的调用链或入口。HTTP PoC 目标 URL 必须使用 path_context.entry.full_url（存在时）"
+    "并保留 {CANARY_URL} 作为回调证明；没有 target_url 时只给 route 与占位符，不要臆造 host。"
     "禁止生成 rm -rf / 反弹 shell / sudo 等 payload。"
     "验证占位符：HTTP 回调使用 {CANARY_URL}，命令回显使用 {CANARY_CMD}，文件副作用使用 {CANARY_FILE}。"
     '只输出 JSON：{"exploit_chain": ["step1", ...], "poc_script": "...", "notes": "备注"}'
 )
+
+
+def _path_context(scan_id: int, finding: dict, target_url: str = "") -> dict:
+    """读取路径入口/节点，构造 PoC 上下文；任何异常返回空，不影响旧 finding。"""
+    path_id = finding.get("path_id")
+    if not path_id and isinstance(finding.get("taint_metadata"), dict):
+        path_id = finding["taint_metadata"].get("path_id")
+    try:
+        path_id = int(path_id or 0)
+    except (TypeError, ValueError):
+        return {}
+    if path_id <= 0 or int(scan_id or 0) <= 0:
+        return {}
+    try:
+        from pathlib import Path
+
+        from codesentry.db.pool import get_conn
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT p.entry_key, p.source_key, p.sink_key, p.nodes, p.edges,"
+                " p.feasibility, p.kind, s.repo_path"
+                " FROM audit_paths p JOIN scans s ON s.id=p.scan_id"
+                " WHERE p.scan_id=%s AND p.id=%s",
+                (int(scan_id), path_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            keys = list(row[3] or [])
+            project = str(Path(str(row[7])).resolve())
+            details = []
+            if keys:
+                cur.execute(
+                    "SELECT node_key, kind, name, path, qualified_name, start_line,"
+                    " end_line, attrs FROM graph_nodes WHERE project=%s AND node_key = ANY(%s)",
+                    (project, keys),
+                )
+                by_key = {
+                    r[0]: {"key": r[0], "kind": r[1], "name": r[2], "file": r[3],
+                           "qualified_name": r[4], "start": r[5], "end": r[6],
+                           "attrs": r[7] or {}}
+                    for r in cur.fetchall()
+                }
+                details = [by_key[k] for k in keys if k in by_key]
+        entry = details[0] if details else {}
+        attrs = entry.get("attrs") or {}
+        route = str(attrs.get("route") or "")
+        method = str(attrs.get("method") or "GET").upper()
+        full_url = ""
+        if target_url and route.startswith("/"):
+            full_url = target_url.rstrip("/") + route
+        return {
+            "path_id": path_id,
+            "kind": row[6] or "",
+            "feasibility": row[5] or "",
+            "entry": {
+                "key": row[0], "method": method, "route": route,
+                "full_url": full_url,
+                "permission": attrs.get("permission") or "",
+                "file": entry.get("file") or "",
+                "line": entry.get("start") or 0,
+            },
+            "source_key": row[1], "sink_key": row[2],
+            "nodes": details,
+            "edges": row[4] or [],
+            "target_url": target_url if full_url else "",
+        }
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _graph_chain(evidence: dict) -> list[str]:
@@ -63,14 +134,16 @@ def check_payload_safety(poc_script: str) -> tuple[bool, str]:
 
 
 def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None,
-            tools=None, max_iterations: int = 8) -> dict:
+            tools=None, max_iterations: int = 8,
+            path_context: dict | None = None) -> dict:
     cwe = int(finding.get("cwe") or 0)
     kind = "http" if cwe in HTTP_CWES else "local"
     graph_chain = _graph_chain(evidence)
     user = json.dumps(
-        {"finding": finding, "evidence": evidence, "graph_chain": graph_chain},
+        {"finding": finding, "evidence": evidence, "graph_chain": graph_chain,
+         "path_context": path_context or {}},
         ensure_ascii=False,
-    )[:12000]
+    )[:16000]
     if system and "poc_script" not in system:
         system = system.rstrip() + "\n\n" + _DEFAULT_SYSTEM
     system = system or _DEFAULT_SYSTEM
@@ -104,13 +177,19 @@ def gen_poc(llm, finding: dict, evidence: dict, system: str | None = None,
         if not script:
             return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
                     "notes": notes or "LLM 输出中没有可用 PoC", "rejected": False,
-                    "tool_trace": trace}
+                    "tool_trace": trace,
+                    "path_id": (path_context or {}).get("path_id"),
+                    "entry_url": ((path_context or {}).get("entry") or {}).get("full_url", "")}
         safe, reason = check_payload_safety(script)
         if not safe:
             return {"exploit_chain": chain, "poc_script": "", "poc_kind": kind,
-                    "notes": reason, "rejected": True, "tool_trace": trace}
+                    "notes": reason, "rejected": True, "tool_trace": trace,
+                    "path_id": (path_context or {}).get("path_id"),
+                    "entry_url": ((path_context or {}).get("entry") or {}).get("full_url", "")}
         return {"exploit_chain": chain, "poc_script": script, "poc_kind": kind,
-                "notes": notes, "rejected": False, "tool_trace": trace}
+                "notes": notes, "rejected": False, "tool_trace": trace,
+                "path_id": (path_context or {}).get("path_id"),
+                "entry_url": ((path_context or {}).get("entry") or {}).get("full_url", "")}
     except Exception as e:  # noqa: BLE001 - 生成失败 → finding 保留 + plausible + 原因（§10）
         return {"exploit_chain": [], "poc_script": "", "poc_kind": kind,
                 "notes": f"生成失败：{str(e)[:80]}", "rejected": False, "tool_trace": []}
@@ -208,13 +287,17 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
     work = Path(get_settings().work_dir)
     poc_results: dict[str, dict] = {}
     updated: list[dict] = []
+    scan_id = int(state.get("scan_id") or 0)
+    target_url = str(state.get("target_url") or "")
     for t in triaged:
         fdict = {k: v for k, v in t.items() if k != "triage"}
         key = f"{fdict.get('rule_id')}@{fdict.get('line')}"
+        path_ctx = _path_context(scan_id, fdict, target_url)
         if mode == "off":
             gen = gen_poc(
                 llm, fdict, (state.get("evidence") or {}).get(key, {}),
                 system=system, tools=tools, max_iterations=max_iterations,
+                path_context=path_ctx,
             ) if llm else {"exploit_chain": [], "poc_script": "", "poc_kind": "local",
                            "notes": "no llm", "rejected": False, "tool_trace": []}
             script = str(gen.get("poc_script") or "")
@@ -231,26 +314,33 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
                 "verdict": "plausible",
                 "execution_log": "POC_RUN=off（或能力矩阵禁用 poc_exec）— 只生成不执行（D28）",
                 "tool_trace": gen.get("tool_trace", []),
+                "path_id": path_ctx.get("path_id"),
+                "entry_url": (path_ctx.get("entry") or {}).get("full_url", ""),
             }
             updated.append({**t, "poc": poc_results[key]})
             continue
         gen = gen_poc(
             llm, fdict, (state.get("evidence") or {}).get(key, {}),
             system=system, tools=tools, max_iterations=max_iterations,
+            path_context=path_ctx,
         ) if llm else {"exploit_chain": [], "poc_script": "", "poc_kind": "local",
                        "notes": "no llm", "rejected": False, "tool_trace": []}
         script = str(gen.get("poc_script") or "")
         if gen.get("rejected"):
             poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "",
                                 "verdict": "plausible", "execution_log": gen["notes"],
-                                "tool_trace": gen.get("tool_trace", [])}
+                                "tool_trace": gen.get("tool_trace", []),
+                                "path_id": path_ctx.get("path_id"),
+                                "entry_url": (path_ctx.get("entry") or {}).get("full_url", "")}
             updated.append({**t, "poc": poc_results[key]})
             continue
         if not script:
             poc_results[key] = {"exploit_chain": gen["exploit_chain"], "poc_file": "",
                                 "verdict": "plausible",
                                 "execution_log": f"生成失败：{gen['notes']}",
-                                "tool_trace": gen.get("tool_trace", [])}
+                                "tool_trace": gen.get("tool_trace", []),
+                                "path_id": path_ctx.get("path_id"),
+                                "entry_url": (path_ctx.get("entry") or {}).get("full_url", "")}
             updated.append({**t, "poc": poc_results[key]})
             continue
         poc_dir = work / "poc"
@@ -285,6 +375,8 @@ def run_poc_gen(state: dict, llm=None, runtime=None) -> dict:
             "verdict": verdict, "execution_log": log,
             "verification_method": method, "verification_nonce": nonce,
             "tool_trace": gen.get("tool_trace", []),
+            "path_id": path_ctx.get("path_id"),
+            "entry_url": (path_ctx.get("entry") or {}).get("full_url", ""),
         }
         updated.append({**t, "poc": poc_results[key]})
     return {"poc_results": poc_results, "triaged_findings": updated,

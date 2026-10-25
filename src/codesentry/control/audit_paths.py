@@ -5,28 +5,87 @@ from __future__ import annotations
 import json
 
 
-def claim_paths(scan_id: int, limit: int = 8, lease_s: int = 900) -> list[dict]:
+def claim_paths(scan_id: int, limit: int = 8, lease_s: int = 900, *,
+                max_paths: int | None = None,
+                entry_only_max: int | None = None,
+                priority: str = "proven_first",
+                max_attempts: int = 2) -> list[dict]:
+    """认领待审路径。
+
+    - max_paths/entry_only_max 统计的是已审计（status != pending）的数量，跨轮次生效；
+    - proven/likely/weak 优先，entry-only 只在剩余名额内认领；
+    - FOR UPDATE SKIP LOCKED 保证并发认领不重复。
+    """
     from codesentry.control.bootstrap import ensure_control_schema
     from codesentry.db.pool import get_conn
 
     ensure_control_schema()
+    requested = max(1, min(int(limit), 32))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "WITH picked AS ("
-            " SELECT id FROM audit_paths WHERE scan_id=%s AND status='pending'"
-            " ORDER BY score DESC, id ASC LIMIT %s FOR UPDATE SKIP LOCKED"
-            ") UPDATE audit_paths p SET status='auditing',"
+            "SELECT count(*) FILTER (WHERE status <> 'pending'),"
+            " count(*) FILTER (WHERE kind='entry_only' AND status <> 'pending')"
+            " FROM audit_paths WHERE scan_id=%s",
+            (int(scan_id),),
+        )
+        audited, entry_audited = cur.fetchone()
+        audited = int(audited or 0)
+        entry_audited = int(entry_audited or 0)
+        remaining = requested
+        if max_paths is not None:
+            remaining = min(remaining, max(0, int(max_paths) - audited))
+        entry_remaining: int | None = None
+        if entry_only_max is not None:
+            entry_remaining = max(0, int(entry_only_max) - entry_audited)
+        if remaining <= 0:
+            return []
+        order = (
+            "score DESC, id ASC"
+            if priority == "score"
+            else "CASE feasibility WHEN 'proven' THEN 0 WHEN 'likely' THEN 1 ELSE 2 END,"
+                 " score DESC, id ASC"
+        )
+        ids: list[int] = []
+        cur.execute(
+            f"SELECT id FROM audit_paths WHERE scan_id=%s AND status='pending'"
+            f" AND attempts < %s AND kind <> 'entry_only' ORDER BY {order} LIMIT %s"
+            " FOR UPDATE SKIP LOCKED",
+            (int(scan_id), max(1, int(max_attempts)), remaining),
+        )
+        ids.extend(int(r[0]) for r in cur.fetchall())
+        if len(ids) < remaining and entry_remaining != 0:
+            entry_limit = remaining - len(ids)
+            if entry_remaining is not None:
+                entry_limit = min(entry_limit, entry_remaining)
+            if entry_limit > 0:
+                cur.execute(
+                    f"SELECT id FROM audit_paths WHERE scan_id=%s AND status='pending'"
+                    f" AND attempts < %s AND kind='entry_only' ORDER BY {order}"
+                    " LIMIT %s FOR UPDATE SKIP LOCKED",
+                    (int(scan_id), max(1, int(max_attempts)), entry_limit),
+                )
+                ids.extend(int(r[0]) for r in cur.fetchall())
+        if not ids:
+            return []
+        cur.execute(
+            "UPDATE audit_paths p SET status='auditing',"
             " leased_until=now() + make_interval(secs => %s), attempts=attempts+1"
-            " FROM picked WHERE p.id=picked.id"
+            " WHERE p.id = ANY(%s)"
             " RETURNING p.id, p.path_key, p.entry_key, p.source_key, p.sink_key,"
             " p.nodes, p.edges, p.length, p.score, p.feasibility, p.round, p.kind",
-            (int(scan_id), max(1, min(int(limit), 32)), max(60, int(lease_s))),
+            (max(60, int(lease_s)), ids),
         )
         rows = cur.fetchall()
         conn.commit()
     keys = ("id", "path_key", "entry_key", "source_key", "sink_key", "nodes",
             "edges", "length", "score", "feasibility", "round", "kind")
-    return [dict(zip(keys, r)) for r in rows]
+    out = [dict(zip(keys, r)) for r in rows]
+    if priority != "score":
+        out.sort(key=lambda p: (
+            {"proven": 0, "likely": 1}.get(str(p.get("feasibility")), 2),
+            -float(p.get("score") or 0),
+        ))
+    return out
 
 
 def finish_path(path_id: int, status: str, result: dict | None = None) -> None:
@@ -97,14 +156,66 @@ def coverage(scan_id: int) -> dict:
             "SELECT status, count(*) FROM audit_paths WHERE scan_id=%s GROUP BY status",
             (int(scan_id),),
         )
-        by_status = dict(cur.fetchall())
-        cur.execute("SELECT count(DISTINCT entry_key), count(DISTINCT sink_key)"
-                    " FROM audit_paths WHERE scan_id=%s", (int(scan_id),))
-        entries, sinks = cur.fetchone()
+        by_status = {str(k): int(v) for k, v in cur.fetchall()}
+        cur.execute(
+            "SELECT count(DISTINCT entry_key),"
+            " count(DISTINCT CASE WHEN sink_key <> '' THEN sink_key END),"
+            " count(*),"
+            " count(*) FILTER (WHERE kind='entry_only'),"
+            " count(*) FILTER (WHERE EXISTS ("
+            "   SELECT 1 FROM jsonb_array_elements(edges) e"
+            "   WHERE e->>'kind' IN ('dataflow','taints_to')))"
+            " FROM audit_paths WHERE scan_id=%s",
+            (int(scan_id),),
+        )
+        entries, sinks, total, entry_only, dataflow_paths = cur.fetchone()
         cur.execute("SELECT max(round) FROM audit_paths WHERE scan_id=%s", (int(scan_id),))
-        max_round = cur.fetchone()[0] or 0
-    return {"by_status": by_status, "entries_covered": int(entries or 0),
-            "sinks_covered": int(sinks or 0), "rounds": int(max_round)}
+        path_round = int(cur.fetchone()[0] or 0)
+        cur.execute(
+            "SELECT max(round), max(batch), max(paths_total) FROM audit_rounds WHERE scan_id=%s",
+            (int(scan_id),),
+        )
+        round_row = cur.fetchone()
+        round_no = max(path_round, int((round_row or [0])[0] or 0))
+        batch = int((round_row or [0, 0])[1] or 0)
+        cur.execute(
+            "SELECT repo_path FROM scans WHERE id=%s",
+            (int(scan_id),),
+        )
+        row = cur.fetchone()
+        project = ""
+        if row and row[0]:
+            from pathlib import Path
+
+            project = str(Path(str(row[0])).resolve())
+        sinks_total = 0
+        if project:
+            cur.execute(
+                "SELECT count(*) FROM graph_nodes WHERE project=%s AND kind='sink'",
+                (project,),
+            )
+            sinks_total = int(cur.fetchone()[0] or 0)
+    try:
+        from codesentry.config import get_settings
+
+        max_rounds = int(get_settings().audit_max_rounds)
+    except Exception:  # noqa: BLE001
+        max_rounds = 0
+    return {
+        "by_status": by_status,
+        "total": int(total or 0),
+        "pending": int(by_status.get("pending", 0)),
+        "auditing": int(by_status.get("auditing", 0)),
+        "paths": int(total or 0),
+        "entries_covered": int(entries or 0),
+        "sinks_covered": int(sinks or 0),
+        "sinks_total": sinks_total,
+        "entry_only": int(entry_only or 0),
+        "dataflow_paths": int(dataflow_paths or 0),
+        "rounds": round_no,
+        "batch": batch,
+        "max_rounds": max_rounds,
+    }
 
 
 def enqueue_paths(scan_id: int, paths: list[dict], round_no: int = 1) -> int:

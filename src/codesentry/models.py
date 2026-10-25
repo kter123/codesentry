@@ -36,3 +36,5 @@ class EngineResult(BaseModel):
     status: Literal["ok", "timeout", "crashed", "unavailable"]
     findings: list[Finding] = Field(default_factory=list)
     reason: str = ""
+    lang: str = ""
+    artifact: str = ""

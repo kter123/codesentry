@@ -25,6 +25,8 @@ class AgentRuntime:
     tools_allow: list = field(default_factory=list)
     skills_allow: list = field(default_factory=list)
     wrapup_prompt: str = ""
+    preset_id: int | None = None
+    preset_version: int | None = None
 
     def system(self) -> str:
         if self.skills_block:
@@ -33,8 +35,13 @@ class AgentRuntime:
 
     def prompt_snapshot(self) -> dict:
         if not self.prompt_version:
+            if self.preset_id:
+                return {self.agent: {"preset_id": self.preset_id,
+                                     "preset_version": self.preset_version}}
             return {}
-        return {self.agent: {"version": self.prompt_version}}
+        out = {"version": self.prompt_version, "preset_id": self.preset_id,
+               "preset_version": self.preset_version}
+        return {self.agent: {k: v for k, v in out.items() if v is not None}}
 
     def skills_snapshot(self) -> dict:
         items = []
@@ -122,12 +129,41 @@ def prepare_agent(
     if fallback:
         warnings.append("Prompt 回退到代码内种子（DB 无生效版本或不可用）")
 
+    preset_id = cfg.get("preset_id")
+    preset_version = None
+    preset = None
+    if preset_id:
+        try:
+            from codesentry.control.agent_presets import get_preset
+
+            preset = get_preset(int(preset_id))
+        except Exception:  # noqa: BLE001
+            preset = None
+        if preset and preset.get("enabled", True):
+            from codesentry.agents.prompts import compose_prompt
+
+            try:
+                prompt = compose_prompt(agent, str(preset["system_prompt"]),
+                                        prompt_vars, force_tail=True)
+                version, fallback = None, False
+                preset_version = int(preset.get("version") or 1)
+                warnings.append(f"使用自定义 Agent Preset：{preset['name']}")
+            except KeyError as e:
+                warnings.append(f"Preset Prompt 渲染失败：{e}")
+        elif preset_id:
+            warnings.append(f"preset {preset_id} 不存在或已停用，回退内置 Prompt")
+
+    tools_allow = list(cfg.get("tools_allow") or [])
+    skills_allow = list(cfg.get("skills_allow") or [])
+    if preset and preset.get("enabled", True):
+        tools_allow = list(dict.fromkeys([*tools_allow, *(preset.get("tools_allow") or [])]))
+        skills_allow = list(dict.fromkeys([*skills_allow, *(preset.get("skills_allow") or [])]))
+
     if snapshot is not None and "skills_snapshot" in snapshot:
         snap_skills = (snapshot.get("skills_snapshot") or {}).get(agent) or []
         skills = load_snapshot_skills(snap_skills)
     else:
         skills = load_assigned_skills(agent)
-    skills_allow = list(cfg.get("skills_allow") or [])
     if skills_allow:
         skills = [s for s in skills if getattr(s, "name", "") in skills_allow]
     settings = get_settings()
@@ -136,6 +172,8 @@ def prepare_agent(
     )
     warnings.extend(sk_warnings)
     capabilities = effective_capabilities(agent)
+    if preset and preset.get("enabled", True):
+        capabilities = {**capabilities, **(preset.get("capabilities") or {})}
     role = role or str(cfg.get("model_role") or "deep")
 
     llm = None
@@ -210,7 +248,9 @@ def prepare_agent(
         profile_id=getattr(llm, "profile_id", None),
         max_iterations=int(cfg.get("max_iterations") or 8),
         budget_override=cfg.get("budget_override") or {},
-        tools_allow=list(cfg.get("tools_allow") or []),
+        tools_allow=tools_allow,
         skills_allow=skills_allow,
         wrapup_prompt=str(cfg.get("wrapup_prompt") or ""),
+        preset_id=int(preset_id) if preset_id else None,
+        preset_version=preset_version,
     )

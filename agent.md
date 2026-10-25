@@ -327,4 +327,5 @@ flowchart TD
 | G1–G4 图谱核心 | ✅ 完成（2026-10-23） | doc/2026-10-22-graph-core-and-agent-platform-spec.md、doc/2026-10-23-graph-core-implementation.md | kvf-admin 311 文件：5,782 节点/12,087 边/95 接口/21s；六语言抽取器；图查询与图 UI；282 tests 绿 | 未提交 |
 | 路径中心多轮审计 | ✅ 完成（2026-10-24） | doc/2026-10-24-path-centric-audit-{spec,plan,implementation}.md + 两轮 review | kvf：37 路径/20 入口/6 轮/10 findings（run 1164）；4 findings（run 1212）；完整链路 1214 跑通；OpenCode Go 4 轮真实 Agent 测试通过；293 tests 绿 | 未提交 |
 | 引擎 Dataflow 入图 | ✅ 完成（2026-10-24） | doc/2026-10-24-engine-dataflow-graph-{spec,plan,implementation}.md + 两轮 review | Joern calls 364/dataflow 26；kvf endpoint 覆盖 95/95（含 entry-only）、sink 27/112、dataflow 路径 27；本地 bge-m3 1024 维实测入库；299 tests 绿 | 未提交 |
+| 2026-10-25 P0/P1 收口 | ✅ 完成 | doc/2026-10-25-remaining-backlog-{spec,spec-audit,plan,plan-audit,implementation}.md + review-1/2 | CodeQL Java/Python/JS 全链路（SARIF CWE/tag、codeFlows→sink dataflow）；路径级 PoC/entry_url；路径 UI 图高亮；attempt/recursion 成本收敛；kvf 本地 Java 镜像构建成功但 MySQL/Redis 未就绪 → degraded；Playwright 21/21 路由；352 tests 绿 | 本轮提交 |
 | M1–M2 管理面 | ✅ 完成（2026-10-23） | 同上 | Prompt 三段式/变量预览；Agent 工具技能白名单；LLM 池熔断/健康/原始调用；前端构建通过 | 未提交 |

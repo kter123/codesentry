@@ -87,12 +87,15 @@ class CanaryVerifier:
     def verify_listener(self, script: str, nonce: str) -> CanaryResult:
         if "{CANARY_URL}" not in script:
             return CanaryResult(False, "listener", nonce, "PoC 未声明 {CANARY_URL}")
-        srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        import os
+
+        srv = ThreadingHTTPServer(("0.0.0.0", 0), _Handler)
         srv.hit = False  # type: ignore[attr-defined]
         thread = threading.Thread(target=srv.serve_forever, daemon=True)
         thread.start()
         try:
-            url = f"http://127.0.0.1:{srv.server_port}/{nonce}"
+            host = os.environ.get("CODESENTRY_CANARY_HOST", "host.docker.internal")
+            url = f"http://{host}:{srv.server_port}/{nonce}"
             try:
                 self._exec(script.replace("{CANARY_URL}", url))
             except Exception:  # noqa: BLE001, S110 - 回调可能先于异常发生

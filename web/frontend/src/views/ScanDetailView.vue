@@ -273,15 +273,27 @@
 
           <el-tab-pane label="审计路径" name="paths">
             <div class="toolbar">
-              <el-tag effect="plain">路径 {{ coverage.paths ?? auditPaths.length }}</el-tag>
-              <el-tag effect="plain">入口覆盖 {{ coverage.entries_covered ?? 0 }}</el-tag>
-              <el-tag effect="plain">Sink 覆盖 {{ coverage.sinks_covered ?? 0 }}</el-tag>
-              <el-tag effect="plain">轮次 {{ coverage.rounds ?? 0 }}</el-tag>
+              <el-tag effect="plain">路径 {{ coverage.total ?? coverage.paths ?? auditPaths.length }}</el-tag>
+              <el-tag type="warning" effect="plain">待审 {{ coverage.pending ?? 0 }}</el-tag>
+              <el-tag type="info" effect="plain">Entry-only {{ coverage.entry_only ?? 0 }}</el-tag>
+              <el-tag type="success" effect="plain">
+                Sink {{ coverage.sinks_covered ?? 0 }}/{{ coverage.sinks_total ?? '—' }}
+              </el-tag>
+              <el-tag effect="plain">数据流路径 {{ coverage.dataflow_paths ?? 0 }}</el-tag>
+              <el-tag effect="plain">轮次 {{ coverage.rounds ?? 0 }}/{{ coverage.max_rounds ?? '—' }}</el-tag>
+              <el-tag effect="plain">批次 {{ coverage.batch ?? 0 }}</el-tag>
               <div class="grow" />
               <el-button size="small" :loading="pathsLoading" @click="loadPaths">刷新</el-button>
             </div>
-            <el-table :data="auditPaths" size="small" max-height="480">
+            <el-table
+              :data="auditPaths"
+              size="small"
+              max-height="480"
+              highlight-current-row
+              @row-click="openPath"
+            >
               <el-table-column prop="id" label="#" width="60" />
+              <el-table-column prop="kind" label="类型" width="110" />
               <el-table-column prop="entry_key" label="入口" min-width="220" show-overflow-tooltip />
               <el-table-column prop="sink_key" label="Sink" min-width="220" show-overflow-tooltip />
               <el-table-column prop="feasibility" label="可行性" width="90" />
@@ -289,6 +301,21 @@
               <el-table-column prop="round" label="轮次" width="70" />
               <el-table-column prop="status" label="状态" width="90" />
               <el-table-column prop="finding_id" label="Finding" width="80" />
+              <el-table-column label="操作" width="110" fixed="right">
+                <template #default="{ row }">
+                  <el-button
+                    link
+                    type="primary"
+                    @click.stop="openPath(row)"
+                  >详情</el-button>
+                  <el-button
+                    link
+                    type="success"
+                    :disabled="!row.nodes?.length"
+                    @click.stop="openPathInGraph(row)"
+                  >图</el-button>
+                </template>
+              </el-table-column>
               <template #empty>
                 <el-empty :image-size="60" description="暂无审计路径（路径构建中或未发现）" />
               </template>
@@ -316,6 +343,10 @@
               {{ selected.confidence === undefined || selected.confidence === null ? '—' : Number(selected.confidence).toFixed(3) }}
             </el-descriptions-item>
             <el-descriptions-item label="PoC 路径">{{ selected.poc_path || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="Path ID">{{ selected.path_id || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="PoC 入口" :span="2">
+              <span class="mono">{{ selected.entry_url || '—' }}</span>
+            </el-descriptions-item>
             <el-descriptions-item label="文件" :span="2">
               <span class="mono">{{ selected.file || selected.file_rel || '—' }}:{{ selected.line ?? '—' }}</span>
             </el-descriptions-item>
@@ -401,6 +432,90 @@
       </div>
     </el-drawer>
 
+    <el-drawer v-model="pathDrawer" title="审计路径详情" size="66%" destroy-on-close>
+      <div v-loading="pathLoading">
+        <template v-if="pathDetail">
+          <el-descriptions :column="3" border size="small">
+            <el-descriptions-item label="Path #">{{ pathDetail.id }}</el-descriptions-item>
+            <el-descriptions-item label="类型">{{ pathDetail.kind }}</el-descriptions-item>
+            <el-descriptions-item label="可行性">{{ pathDetail.feasibility }}</el-descriptions-item>
+            <el-descriptions-item label="分数">{{ pathDetail.score }}</el-descriptions-item>
+            <el-descriptions-item label="轮次/状态">
+              {{ pathDetail.round }} / {{ pathDetail.status }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Finding">{{ pathDetail.finding_id || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="入口" :span="3">
+              <span class="mono">{{ pathDetail.entry_key || '—' }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="Sink" :span="3">
+              <span class="mono">{{ pathDetail.sink_key || '—' }}</span>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div class="toolbar" style="margin-top: 12px">
+            <el-button size="small" type="primary" @click="openPathInGraph(pathDetail)">
+              在图中高亮
+            </el-button>
+            <el-button
+              v-if="pathDetail.finding_id"
+              size="small"
+              @click="openPathFinding(pathDetail)"
+            >查看 Finding</el-button>
+            <span class="muted">
+              {{ pathDetail.nodes_detail?.length || 0 }} 节点 ·
+              {{ pathDetail.edges_detail?.length || 0 }} 边
+            </span>
+          </div>
+
+          <h3 class="panel-title" style="margin-top: 16px">路径节点</h3>
+          <el-table :data="pathDetail.nodes_detail || []" size="small" max-height="280">
+            <el-table-column prop="kind" label="类型" width="100" />
+            <el-table-column label="名称" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.qualified_name || row.name || row.key }}</template>
+            </el-table-column>
+            <el-table-column label="位置" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="mono">{{ row.file || '—' }}:{{ row.start || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="源码" width="90">
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.file"
+                  link
+                  type="primary"
+                  @click="loadPathNodeSource(row)"
+                >查看</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <h3 class="panel-title" style="margin-top: 16px">路径边</h3>
+          <el-table :data="pathDetail.edges_detail || []" size="small" max-height="220">
+            <el-table-column prop="kind" label="类型" width="110" />
+            <el-table-column label="From" min-width="240" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.src_kind }} · {{ row.src_name }}</template>
+            </el-table-column>
+            <el-table-column label="To" min-width="240" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.dst_kind }} · {{ row.dst_name }}</template>
+            </el-table-column>
+          </el-table>
+
+          <template v-if="pathNodeSource">
+            <h3 class="panel-title" style="margin-top: 16px">
+              源码切片
+              <span class="panel-subtitle mono">{{ pathNodeSource.path }}:{{ pathNodeSource.start }}</span>
+            </h3>
+            <pre class="pre-block">{{ pathNodeSource.text }}</pre>
+          </template>
+
+          <h3 class="panel-title" style="margin-top: 16px">证据</h3>
+          <json-block :value="pathDetail.evidence ?? null" />
+        </template>
+        <el-empty v-else-if="!pathLoading" description="路径不存在或已清理" />
+      </div>
+    </el-drawer>
+
     <el-drawer v-model="assistVisible" title="Ask CodeSentry" size="46%" destroy-on-close>
       <el-input
         v-model="assistQuestion"
@@ -475,6 +590,44 @@ interface LiveEvent {
   duration_ms?: number
 }
 
+interface PathNodeDetail {
+  key: string
+  kind?: string
+  name?: string
+  qualified_name?: string
+  file?: string
+  start?: number
+  end?: number
+  missing?: boolean
+}
+
+interface PathEdgeDetail {
+  kind?: string
+  src?: string
+  dst?: string
+  src_kind?: string
+  dst_kind?: string
+  src_name?: string
+  dst_name?: string
+}
+
+interface PathDetail {
+  id: number
+  kind?: string
+  feasibility?: string
+  score?: number
+  round?: number
+  status?: string
+  finding_id?: number | null
+  entry_key?: string
+  sink_key?: string
+  nodes?: string[]
+  edges?: Array<Record<string, unknown>>
+  evidence?: unknown
+  nodes_detail?: PathNodeDetail[]
+  edges_detail?: PathEdgeDetail[]
+}
+
 const route = useRoute()
 const router = useRouter()
 const scanId = computed(() => Number(route.params.id))
@@ -497,6 +650,10 @@ const drawer = ref(false)
 const selected = ref<FindingDetail | null>(null)
 const detailLoading = ref(false)
 const sourceLines = ref<SourceLine[]>([])
+const pathDrawer = ref(false)
+const pathDetail = ref<PathDetail | null>(null)
+const pathLoading = ref(false)
+const pathNodeSource = ref<{ path: string; start: number; text: string } | null>(null)
 const artifacts = ref<ArtifactRow[]>([])
 
 const codeqlInfo = computed<{ ok?: boolean; dataflow?: number } | null>(() => {
@@ -551,6 +708,57 @@ async function loadPaths(): Promise<void> {
     coverage.value = coverRes.status === 'fulfilled' ? coverRes.value : {}
   } finally {
     pathsLoading.value = false
+  }
+}
+
+async function openPath(row: Record<string, unknown>): Promise<void> {
+  const id = Number(row.id || 0)
+  if (!id) return
+  pathDrawer.value = true
+  pathLoading.value = true
+  pathNodeSource.value = null
+  pathDetail.value = null
+  try {
+    pathDetail.value = await api.get<PathDetail>(
+      `/api/scans/${scanId.value}/paths/${id}`,
+    )
+  } catch (e) {
+    pathDetail.value = null
+    error.value = `加载路径详情失败：${errorMessage(e)}`
+  } finally {
+    pathLoading.value = false
+  }
+}
+
+function openPathInGraph(path: PathDetail | Record<string, unknown>): void {
+  const id = Number((path as { id?: unknown }).id || 0)
+  if (!id) return
+  void router.push({
+    path: `/scans/${scanId.value}/graph`,
+    query: { path_id: String(id) },
+  })
+}
+
+function openPathFinding(path: PathDetail): void {
+  if (!path.finding_id) return
+  void openFinding({ id: path.finding_id } as GraphFinding)
+}
+
+async function loadPathNodeSource(node: PathNodeDetail): Promise<void> {
+  if (!node.file) return
+  const start = Math.max(1, Number(node.start || 1) - 5)
+  try {
+    const res = await api.get<{ lines?: SourceLine[] }>(
+      `/api/scans/${scanId.value}/source`,
+      { path: node.file, start, end: start + 80 },
+    )
+    pathNodeSource.value = {
+      path: node.file,
+      start,
+      text: (res.lines || []).map((line) => `${line.no}: ${line.text}`).join('\n'),
+    }
+  } catch (e) {
+    error.value = `加载源码失败：${errorMessage(e)}`
   }
 }
 

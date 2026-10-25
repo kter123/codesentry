@@ -67,3 +67,33 @@ class CodeSentryClient:
 
     def usage(self, group_by: str = "agent") -> dict:
         return self._client.get("/api/usage/summary", params={"group_by": group_by}).raise_for_status().json()
+
+    def list_paths(self, scan_id: int, *, status: str = "", round_no: int | None = None,
+                   limit: int = 100) -> dict:
+        params: dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        if round_no is not None:
+            params["round"] = round_no
+        return self._client.get(f"/api/scans/{scan_id}/paths",
+                                params=params).raise_for_status().json()
+
+    def get_path(self, scan_id: int, path_id: int) -> dict:
+        return self._client.get(f"/api/scans/{scan_id}/paths/{path_id}").raise_for_status().json()
+
+    def coverage(self, scan_id: int) -> dict:
+        return self._client.get(f"/api/scans/{scan_id}/coverage").raise_for_status().json()
+
+    def codeql_status(self) -> dict:
+        return self._client.get("/api/engines/codeql/status").raise_for_status().json()
+
+    def engine_test(self) -> dict:
+        return self._client.post("/api/engines/codeql/test").raise_for_status().json()
+
+    def export_config(self) -> dict:
+        return self._client.get("/api/config/export").raise_for_status().json()
+
+    def import_config(self, doc: dict, mode: str = "merge") -> dict:
+        return self._client.post("/api/config/import", json={
+            "doc": doc, "mode": mode,
+        }).raise_for_status().json()

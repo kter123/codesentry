@@ -37,8 +37,16 @@ RECIPES: dict[str, dict] = {
         "image": "maven:3.9-eclipse-temurin-8",
         "port": 8080,
         "command": (
-            "sh -lc 'mvn -q -DskipTests package && "
-            "exec java -jar $(ls target/*.jar | head -1)'"
+            "sh -lc 'mvn -q -DskipTests package || exit 2; "
+            "if ls target/*.jar >/dev/null 2>&1; then "
+            "JAR=$(ls target/*.jar | head -1); "
+            "for J in \"$JAVA_HOME/bin/java\" java /usr/lib/jvm/*/bin/java "
+            "/opt/java/openjdk/bin/java; do "
+            "[ -x \"$J\" ] && exec \"$J\" -jar \"$JAR\"; done; "
+            "echo JAVA_NOT_FOUND; exit 5; "
+            "elif ls target/*.war >/dev/null 2>&1; then "
+            "echo WAR_PACKAGING_REQUIRES_TOMCAT; exit 3; "
+            "else echo NO_JAR_OR_WAR; exit 4; fi'"
         ),
     },
     "gradle": {
@@ -182,6 +190,43 @@ def choose_java_image(explicit: str = "", *, allow_remote: bool = False) -> str 
     return None
 
 
+def _image_exists(client, image: str) -> bool:
+    try:
+        client.images.get(image)
+        return True
+    except Exception:  # noqa: BLE001 - ImageNotFound/daemon error 都视为本地不可用
+        return False
+
+
+def ensure_image(client, image: str, policy: str = "missing") -> bool:
+    """按 never/missing/always 策略确保镜像可用；never 缺失返回 False。"""
+    policy = policy if policy in ("never", "missing", "always") else "missing"
+    exists = _image_exists(client, image)
+    if policy == "never":
+        return exists
+    if policy == "always" or not exists:
+        client.images.pull(image)
+    return True
+
+
+def detect_runtime_dependencies(root: Path) -> list[str]:
+    """从 application*.yml/properties 粗略识别 MySQL/Redis 等外部依赖。"""
+    deps: list[str] = []
+    try:
+        files = list(root.rglob("application*.yml")) + list(root.rglob("application*.yaml"))
+        files += list(root.rglob("application*.properties"))
+        text = "\n".join(f.read_text(errors="replace")[:20000] for f in files[:20]).lower()
+        for name, marker in (
+            ("MySQL", "mysql"), ("Redis", "redis"), ("PostgreSQL", "postgres"),
+            ("RabbitMQ", "rabbitmq"), ("Elasticsearch", "elasticsearch"),
+        ):
+            if marker in text and name not in deps:
+                deps.append(name)
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return deps
+
+
 class DockerDeployer:
     def __init__(self, scan_id: int, repo: str, *, poc_run: str = "off",
                  timeout_s: int = 120, mem_mb: int = 512, cpu: float = 1.0,
@@ -192,7 +237,8 @@ class DockerDeployer:
                  workspace_root: str | Path | None = None,
                  java_image: str = "",
                  maven_image: str = "",
-                 allow_remote_images: bool = False) -> None:
+                 allow_remote_images: bool = False,
+                 image_pull: str = "missing") -> None:
         self.scan_id = int(scan_id)
         self.repo = repo
         self.poc_run = poc_run
@@ -203,6 +249,7 @@ class DockerDeployer:
         self.java_image = java_image
         self.maven_image = maven_image
         self.allow_remote_images = allow_remote_images
+        self.image_pull = image_pull if image_pull in ("never", "missing", "always") else "missing"
         if network_mode is not None:
             self.internal_network = network_mode == "internal"
         else:
@@ -239,6 +286,7 @@ class DockerDeployer:
         image, logs = client.images.build(
             path=str(root), dockerfile=dockerfile, tag=tag, rm=True,
             timeout=max(180, self.timeout_s + 90),
+            pull=self.image_pull == "always",
         )
         tail = []
         for chunk in logs:
@@ -302,6 +350,19 @@ class DockerDeployer:
             working_dir = "/target"
 
         try:
+            if not use_dockerfile:
+                try:
+                    if not ensure_image(client, image, self.image_pull):
+                        return DeployResult(
+                            "disabled",
+                            f"镜像 {image} 本地不存在且 deploy_image_pull=never",
+                            meta={"recipe": recipe_name, "image": image},
+                        )
+                except Exception as e:  # noqa: BLE001
+                    return DeployResult(
+                        "disabled", f"镜像 {image} 不可用（pull={self.image_pull}）：{str(e)[:200]}",
+                        meta={"recipe": recipe_name, "image": image},
+                    )
             try:
                 self._network = client.networks.get(self.network_name)
             except Exception:  # noqa: BLE001
@@ -346,6 +407,10 @@ class DockerDeployer:
 
             log = f"{build_log}\n" if build_log else ""
             log += f"容器 {self.container_name}（{recipe_name}）{status}，target={target_url or '—'}"
+            runtime_deps = detect_runtime_dependencies(root)
+            if runtime_deps and status != "ready":
+                status = "degraded"
+                log += f"；检测到外部依赖 {', '.join(runtime_deps)}，容器可能因依赖未就绪而启动失败"
             if not target_url:
                 try:
                     log += f"；日志：{container.logs(tail=30).decode('utf-8', 'replace')[-600:]}"
@@ -393,7 +458,8 @@ class DockerDeployer:
         )
         deadline = time.time() + min(self.timeout_s, 120)
         while time.time() < deadline:
-            for cmd in (["python", "-c", code], ["wget", "-q", "-O", "-", target_url]):
+            for cmd in (["python", "-c", code], ["wget", "-q", "-O", "-", target_url],
+                        ["curl", "-fsS", target_url]):
                 try:
                     r = container.exec_run(cmd, demux=False)
                     if r.exit_code == 0:
@@ -470,6 +536,7 @@ def run_deploy(state: dict) -> dict:
         java_image=settings.deploy_java_image,
         maven_image=settings.deploy_maven_image,
         allow_remote_images=settings.deploy_image_allow_remote,
+        image_pull=settings.deploy_image_pull,
     )
     try:
         result = deployer.deploy()

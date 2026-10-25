@@ -68,18 +68,50 @@ def _parse_findings(text: str) -> list[dict]:
     return out
 
 
+def _merge_hints(findings: list[dict], hints: list[dict]) -> list[dict]:
+    """无 LLM 时把引擎 hint 的 CWE/严重度补到路径候选，保留 path_id。"""
+    by_loc = {(str(h.get("file") or ""), int(h.get("line") or 0)): h for h in hints
+              if h.get("file") and h.get("line")}
+    out = []
+    for finding in findings:
+        key = (str(finding.get("file") or ""), int(finding.get("line") or 0))
+        hint = by_loc.get(key)
+        if not hint:
+            out.append(finding)
+            continue
+        cwe = int(finding.get("cwe") or 0)
+        if cwe in (0, 610):
+            cwe = int(hint.get("cwe") or cwe)
+        severity = str(finding.get("severity") or "medium")
+        if severity == "medium" and hint.get("severity"):
+            severity = str(hint["severity"])
+        message = str(finding.get("message") or "")
+        if (not message or message.startswith("路径未完成审计")
+                or "未完成判定" in message or message == "路径审计发现"):
+            message = str(hint.get("message") or message)
+        rule_id = str(finding.get("rule_id") or "path")
+        if rule_id.startswith("path.") and cwe:
+            rule_id = f"path.{cwe}"
+        taint = {**(finding.get("taint_metadata") or {}), "engine_hint": hint}
+        out.append({**finding, "cwe": cwe, "severity": severity, "message": message,
+                    "rule_id": rule_id, "taint_metadata": taint})
+    return out
+
+
 def run_audit_agent(state: dict, runtime=None, llm=None) -> dict:
     hints = list(state.get("engine_hints") or [])
     previous = list(state.get("candidate_findings") or [])
     repo = str(state.get("repo_path") or "")
     if runtime is not None and not runtime.enabled:
-        candidates = previous or [_hint_to_candidate(h) for h in hints]
+        candidates = _merge_hints(previous, hints) if previous else [
+            _hint_to_candidate(h) for h in hints]
         return {"candidate_findings": candidates, "audit": {"skipped": "agent disabled"},
                 "audit_feedback": "", "phase": "triage"}
     if runtime is not None:
         llm = runtime.llm or llm
     if llm is None or not repo:
-        candidates = previous or [_hint_to_candidate(h) for h in hints]
+        candidates = _merge_hints(previous, hints) if previous else [
+            _hint_to_candidate(h) for h in hints]
         return {"candidate_findings": candidates, "audit": {"skipped": "no llm"},
                 "audit_feedback": "", "phase": "triage"}
 

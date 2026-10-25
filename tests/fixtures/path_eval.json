@@ -1,0 +1,31 @@
+{
+  "cases": [
+    {
+      "name": "python_eval_cmd",
+      "files": {
+        "app.py": "from flask import Flask, request\napp = Flask(__name__)\n@app.route('/run')\ndef run():\n    cmd = request.args.get('cmd')\n    return eval(cmd)\n"
+      },
+      "hint": {"file": "app.py", "line": 6, "rule_id": "py/eval", "cwe": 95, "severity": "high", "message": "eval on request arg"},
+      "expect_verdict": "finding",
+      "expect_cwe": 95
+    },
+    {
+      "name": "python_ssrf",
+      "files": {
+        "app.py": "from flask import Flask, request\nimport requests\napp = Flask(__name__)\n@app.route('/fetch')\ndef fetch():\n    url = request.args.get('url')\n    return requests.get(url).text\n"
+      },
+      "hint": {"file": "app.py", "line": 7, "rule_id": "py/ssrf", "cwe": 918, "severity": "high", "message": "requests.get on request arg"},
+      "expect_verdict": "finding",
+      "expect_cwe": 918
+    },
+    {
+      "name": "python_safe_eval",
+      "files": {
+        "app.py": "from flask import Flask\napp = Flask(__name__)\n@app.route('/safe')\ndef safe():\n    return eval('1 + 1')\n"
+      },
+      "hint": {"file": "app.py", "line": 5, "rule_id": "py/eval-const", "cwe": 95, "severity": "low", "message": "eval constant"},
+      "expect_verdict": "clean",
+      "expect_cwe": 95
+    }
+  ]
+}

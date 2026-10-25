@@ -240,6 +240,76 @@
       </el-col>
     </el-row>
 
+    <div class="panel">
+      <div class="toolbar">
+        <h2 class="panel-title" style="margin: 0">自定义 Agent Preset</h2>
+        <div class="grow" />
+        <el-select v-model="presetId" clearable placeholder="选择 preset" style="width: 240px">
+          <el-option v-for="p in presets" :key="p.id" :label="`${p.name} (v${p.version})`" :value="p.id" />
+        </el-select>
+        <el-button size="small" type="primary" @click="bindPreset">绑定</el-button>
+        <el-button size="small" @click="unbindPreset">解绑</el-button>
+        <el-button size="small" @click="openPresetDialog">新建</el-button>
+      </div>
+      <div class="muted" style="font-size: 12px">
+        Preset 覆盖 Prompt/工具/技能/能力，但仍保留代码内安全与输出契约尾。
+      </div>
+      <div class="toolbar" style="margin-top: 12px; margin-bottom: 0">
+        <el-select v-model="compareA" clearable placeholder="版本 A" style="width: 150px">
+          <el-option v-for="v in promptVersions" :key="v.version" :label="`v${v.version}`" :value="v.version" />
+        </el-select>
+        <el-select v-model="compareB" clearable placeholder="版本 B" style="width: 150px">
+          <el-option v-for="v in promptVersions" :key="v.version" :label="`v${v.version}`" :value="v.version" />
+        </el-select>
+        <el-checkbox v-model="compareUseLlm">调用 LLM</el-checkbox>
+        <el-button size="small" :loading="comparing" @click="runCompare">试跑对比</el-button>
+      </div>
+    </div>
+
+    <el-dialog v-model="presetDialog" title="新建 Agent Preset" width="720px">
+      <el-form label-position="top">
+        <el-row :gutter="12">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="名称"><el-input v-model="presetForm.name" /></el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="说明"><el-input v-model="presetForm.description" /></el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="System Prompt">
+          <el-input v-model="presetForm.system_prompt" type="textarea" :rows="8" />
+        </el-form-item>
+        <el-form-item label="工具白名单（逗号分隔）">
+          <el-input v-model="presetForm.tools" placeholder="graph_paths, read_source" />
+        </el-form-item>
+        <el-form-item label="技能白名单（逗号分隔）">
+          <el-input v-model="presetForm.skills" placeholder="taint, auth-review" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="presetDialog = false">取消</el-button>
+        <el-button type="primary" :loading="presetSaving" @click="createPreset">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="compareVisible" title="Agent 试跑对比" width="820px">
+      <template v-if="compareResult">
+        <el-alert
+          type="info" :closable="false" show-icon
+          :title="`A=${compareResult.a.label} (${compareResult.a.token_est} tokens) · B=${compareResult.b.label} (${compareResult.b.token_est} tokens) · LLM=${compareResult.used_llm}`"
+          style="margin-bottom: 10px"
+        />
+        <h3 class="panel-title">Diff</h3>
+        <pre class="pre-block">{{ compareResult.diff || '（无差异）' }}</pre>
+        <template v-if="compareResult.a.output || compareResult.b.output">
+          <h3 class="panel-title" style="margin-top: 12px">A 输出</h3>
+          <pre class="pre-block light">{{ compareResult.a.output || compareResult.a.error || '—' }}</pre>
+          <h3 class="panel-title" style="margin-top: 12px">B 输出</h3>
+          <pre class="pre-block light">{{ compareResult.b.output || compareResult.b.error || '—' }}</pre>
+        </template>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="dryRunVisible" title="Agent Dry-run" width="720px">
       <template v-if="dryRunResult">
         <el-descriptions :column="2" border size="small" style="margin-bottom: 12px">
@@ -297,7 +367,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Back, Refresh } from '@element-plus/icons-vue'
@@ -351,6 +421,32 @@ interface AgentStats {
   tokens?: number
 }
 
+interface AgentPreset {
+  id: number
+  name: string
+  base_agent: string
+  description?: string
+  system_prompt?: string
+  tools_allow?: string[]
+  skills_allow?: string[]
+  capabilities?: Record<string, unknown>
+  enabled?: boolean
+  version: number
+}
+
+interface PromptVersionRow {
+  version: number
+  active?: boolean
+  body?: string
+}
+
+interface CompareResult {
+  a: { label: string; token_est: number; output?: string; error?: string; body?: string }
+  b: { label: string; token_est: number; output?: string; error?: string; body?: string }
+  diff: string
+  used_llm: boolean
+}
+
 const route = useRoute()
 const agentName = computed(() => String(route.params.name || ''))
 
@@ -384,6 +480,21 @@ const previewVisible = ref(false)
 const previewResult = ref<Record<string, unknown> | null>(null)
 const previewing = ref(false)
 
+const presets = ref<AgentPreset[]>([])
+const presetId = ref<number | null>(null)
+const presetDialog = ref(false)
+const presetSaving = ref(false)
+const presetForm = reactive({
+  name: '', description: '', system_prompt: '', tools: '', skills: '',
+})
+const promptVersions = ref<PromptVersionRow[]>([])
+const compareA = ref<number | null>(null)
+const compareB = ref<number | null>(null)
+const compareUseLlm = ref(false)
+const compareVisible = ref(false)
+const comparing = ref(false)
+const compareResult = ref<CompareResult | null>(null)
+
 function applyConfig(config: AgentConfig): void {
   form.value = {
     ...config,
@@ -413,13 +524,16 @@ async function load(): Promise<void> {
   loadError.value = ''
   saveError.value = ''
   const name = agentName.value
-  const [detailRes, promptRes, skillsRes, statsRes, profilesRes, allSkillsRes] = await Promise.allSettled([
+  const [detailRes, promptRes, skillsRes, statsRes, profilesRes, allSkillsRes,
+    presetsRes, versionsRes] = await Promise.allSettled([
     api.get<AgentDetailResponse>(`/api/agents/${name}`),
     api.get<PromptInfo & { agent?: string }>(`/api/agents/${name}/prompt`),
     api.get<{ skills?: SkillItem[] }>(`/api/agents/${name}/skills`),
     api.get<AgentStats>(`/api/agents/${name}/stats`),
     api.get<{ profiles?: LlmProfile[] }>('/api/llm-profiles'),
     api.get<{ skills?: Array<{ name: string; description?: string }> }>('/api/skills'),
+    api.get<{ presets?: AgentPreset[] }>('/api/agent-presets', { base_agent: name }),
+    api.get<{ versions?: PromptVersionRow[] }>(`/api/prompts/${name}/versions`),
   ])
 
   if (detailRes.status === 'fulfilled') {
@@ -440,6 +554,12 @@ async function load(): Promise<void> {
   if (allSkillsRes.status === 'fulfilled') allSkills.value = allSkillsRes.value?.skills ?? []
   if (statsRes.status === 'fulfilled') stats.value = statsRes.value
   if (profilesRes.status === 'fulfilled') profiles.value = profilesRes.value?.profiles ?? []
+  if (presetsRes.status === 'fulfilled') presets.value = presetsRes.value?.presets ?? []
+  if (versionsRes.status === 'fulfilled') promptVersions.value = versionsRes.value?.versions ?? []
+  const bound = (detailRes.status === 'fulfilled'
+    ? (detailRes.value.config as unknown as { preset_id?: number | null }).preset_id
+    : null)
+  presetId.value = bound ?? null
 
   loading.value = false
 }
@@ -505,6 +625,77 @@ async function save(): Promise<void> {
     saveError.value = `保存失败：${errorMessage(e)}`
   } finally {
     saving.value = false
+  }
+}
+
+async function bindPreset(): Promise<void> {
+  if (!presetId.value) {
+    ElMessage.warning('请选择 preset')
+    return
+  }
+  try {
+    await api.post(`/api/agents/${agentName.value}/bind-preset`, { preset_id: presetId.value })
+    ElMessage.success('Preset 已绑定')
+    await load()
+  } catch (e) {
+    ElMessage.error(errorMessage(e))
+  }
+}
+
+async function unbindPreset(): Promise<void> {
+  try {
+    await api.post(`/api/agents/${agentName.value}/bind-preset`, { preset_id: null })
+    presetId.value = null
+    ElMessage.success('已解绑')
+    await load()
+  } catch (e) {
+    ElMessage.error(errorMessage(e))
+  }
+}
+
+function openPresetDialog(): void {
+  Object.assign(presetForm, { name: '', description: '', system_prompt: '', tools: '', skills: '' })
+  presetDialog.value = true
+}
+
+async function createPreset(): Promise<void> {
+  presetSaving.value = true
+  try {
+    await api.post('/api/agent-presets', {
+      name: presetForm.name,
+      base_agent: agentName.value,
+      description: presetForm.description,
+      system_prompt: presetForm.system_prompt,
+      tools_allow: presetForm.tools.split(',').map((x) => x.trim()).filter(Boolean),
+      skills_allow: presetForm.skills.split(',').map((x) => x.trim()).filter(Boolean),
+    })
+    ElMessage.success('Preset 已创建')
+    presetDialog.value = false
+    await load()
+  } catch (e) {
+    ElMessage.error(errorMessage(e))
+  } finally {
+    presetSaving.value = false
+  }
+}
+
+async function runCompare(): Promise<void> {
+  comparing.value = true
+  compareResult.value = null
+  try {
+    compareResult.value = await api.post<CompareResult>(
+      `/api/agents/${agentName.value}/compare`,
+      {
+        prompt_a: compareA.value,
+        prompt_b: compareB.value,
+        use_llm: compareUseLlm.value,
+      },
+    )
+    compareVisible.value = true
+  } catch (e) {
+    ElMessage.error(`对比失败：${errorMessage(e)}`)
+  } finally {
+    comparing.value = false
   }
 }
 

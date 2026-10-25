@@ -22,6 +22,7 @@ kb_search、vuln_cases、audit_patterns。
 只输出 JSON：
 {"verdict":"finding|clean|blocked|need_more","confidence":0.0-1.0,
  "cwe":78,"severity":"high","reason":"...","fix_advice":"...",
+ "sanitized":false,
  "evidence":[{"file":"...","line":1,"snippet":"..."}]}
 """
 
@@ -153,12 +154,18 @@ def run_path_audit(state: dict, path: dict, runtime=None, llm=None) -> dict:
 
         tools = build_tools(state)
         max_iterations = min(int(getattr(runtime, "max_iterations", 3) or 3), 2)
+        try:
+            from codesentry.config import get_settings
+
+            timeout_s = int(get_settings().audit_path_timeout_s)
+        except Exception:  # noqa: BLE001
+            timeout_s = 60
         text, trace = _call_with_timeout(
             lambda: run_tool_loop(
                 llm, system, json.dumps(context, ensure_ascii=False)[:26000],
                 tools=tools, max_iterations=max_iterations, model_role="deep",
             ),
-            timeout_s=60,
+            timeout_s=max(10, timeout_s),
         ) or ("", [])
         if not text:
             return {"verdict": "need_more", "confidence": 0.0,
@@ -167,11 +174,12 @@ def run_path_audit(state: dict, path: dict, runtime=None, llm=None) -> dict:
         result["tool_trace"] = trace
         if result.get("verdict") not in ("finding", "clean", "blocked", "need_more"):
             result["verdict"] = "need_more"
-        if path.get("feasibility") == "proven" and result.get("verdict") == "clean":
+        if (path.get("feasibility") == "proven" and result.get("verdict") == "clean"
+                and not result.get("sanitized")):
             result["verdict"] = "need_more"
             result["reason"] = (
                 str(result.get("reason") or "")
-                + "；proven 路径判 clean 但未给出净化证据，按待复查保留"
+                + "；proven 路径判 clean 但未声明 sanitized/净化证据，按待复查保留"
             )
         return result
     except Exception as exc:  # noqa: BLE001

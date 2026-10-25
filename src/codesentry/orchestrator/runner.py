@@ -146,7 +146,7 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
     )
 
     try:
-        cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 200}
+        cfg = {"configurable": {"thread_id": f"scan-{scan_id}"}, "recursion_limit": 2000}
         final = g.invoke(st, config=cfg)
         if cp_ctx is not None:
             cp_ctx.__exit__(None, None, None)
@@ -177,8 +177,9 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
                     """
                     INSERT INTO findings (scan_id, rule_id, cwe, severity, confidence, file, line, message, engine,
                                           taint_metadata, exploit_chain, poc_path, verdict, execution_log,
-                                          verification_method, verification_nonce, confidence_parts, tool_trace)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                          verification_method, verification_nonce, confidence_parts, tool_trace,
+                                          path_id, entry_url)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
                         scan_id, tf.get("rule_id"), tf.get("cwe"), tf.get("severity"),
@@ -196,6 +197,8 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
                             "triage": (tf.get("triage") or {}).get("tool_trace") or [],
                             "poc": poc.get("tool_trace") or [],
                         }, ensure_ascii=False),
+                        tf.get("path_id") or (tf.get("taint_metadata") or {}).get("path_id"),
+                        poc.get("entry_url") or "",
                     ),
                 )
             conn.commit()

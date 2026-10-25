@@ -28,8 +28,15 @@ class Settings(BaseSettings):
     audit_batch: int = 8
     audit_concurrency: int = 4
     audit_max_rounds: int = 10
+    audit_max_paths: int = 240
+    audit_entry_only_max: int = 48
+    audit_path_timeout_s: int = 60
+    audit_path_attempts_max: int = 2
+    audit_priority: Literal["proven_first", "score"] = "proven_first"
     path_min_score: float = 0.2
     path_lease_s: int = 900
+    scheduler_enabled: bool = True
+    scheduler_interval_s: int = 30
 
     # llm (D5, D14)
     model_base_url: str = ""

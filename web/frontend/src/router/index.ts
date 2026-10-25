@@ -44,6 +44,12 @@ const router = createRouter({
           meta: { title: '扫描管理' },
         },
         {
+          path: 'projects',
+          name: 'projects',
+          component: () => import('@/views/ProjectsView.vue'),
+          meta: { title: '项目与定时' },
+        },
+        {
           path: 'scans/:id',
           name: 'scan-detail',
           component: () => import('@/views/ScanDetailView.vue'),

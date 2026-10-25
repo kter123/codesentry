@@ -63,7 +63,7 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
 _EDITABLE = {
     "enabled", "model_role", "llm_profile_id", "display_name",
     "capabilities", "timeout_s", "max_iterations", "temperature_override",
-    "budget_override", "ab_json", "tools_allow", "skills_allow", "wrapup_prompt",
+    "budget_override", "ab_json", "tools_allow", "skills_allow", "wrapup_prompt", "preset_id",
 }
 
 
@@ -75,6 +75,7 @@ def _default(name: str) -> dict[str, Any]:
         "enabled": d["enabled"],
         "model_role": d["model_role"],
         "llm_profile_id": None,
+        "preset_id": None,
         "capabilities": dict(d["capabilities"]),
         "timeout_s": d["timeout_s"],
         "max_iterations": d["max_iterations"],
@@ -125,7 +126,7 @@ def get_agent_config(name: str) -> dict[str, Any]:
             cur.execute(
                 "SELECT enabled, model_role, llm_profile_id, display_name, capabilities,"
                 " timeout_s, max_iterations, temperature_override, budget_override, ab_json,"
-                " tools_allow, skills_allow, wrapup_prompt"
+                " tools_allow, skills_allow, wrapup_prompt, preset_id"
                 " FROM agent_configs WHERE name=%s",
                 (name,),
             )
@@ -145,6 +146,7 @@ def get_agent_config(name: str) -> dict[str, Any]:
                 "tools_allow": row[10] or [],
                 "skills_allow": row[11] or [],
                 "wrapup_prompt": row[12] or "",
+                "preset_id": row[13],
             })
     except Exception:  # noqa: BLE001, S110
         pass

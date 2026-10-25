@@ -126,10 +126,12 @@ def render_prompt(body: str, variables: dict | None = None) -> str:
     return _VAR_RE.sub(repl, body)
 
 
-def compose_prompt(agent: str, body: str, variables: dict | None = None) -> str:
+def compose_prompt(agent: str, body: str, variables: dict | None = None,
+                   *, force_tail: bool = False) -> str:
     rendered = render_prompt(body, variables)
     tail = INVARIANT_TAILS.get(agent, "")
-    if tail and INVARIANT_MARKER not in rendered and "只输出 JSON" not in rendered:
+    if tail and (force_tail or (INVARIANT_MARKER not in rendered
+                                and "只输出 JSON" not in rendered)):
         rendered = rendered.rstrip() + "\n\n" + render_prompt(tail, {"marker": INVARIANT_MARKER})
     return rendered
 

@@ -82,6 +82,8 @@ export interface FindingDetail extends GraphFinding {
   taint_metadata?: unknown
   exploit_chain?: unknown
   poc_path?: string
+  entry_url?: string
+  path_id?: number | null
   execution_log?: string
   verification_method?: string
   verification_nonce?: string
@@ -141,6 +143,7 @@ export interface AgentConfig {
   enabled?: boolean
   model_role?: string
   llm_profile_id?: number | null
+  preset_id?: number | null
   capabilities?: {
     engines?: string[]
     network?: boolean

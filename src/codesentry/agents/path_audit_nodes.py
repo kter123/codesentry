@@ -38,8 +38,13 @@ def run_audit_plan(state: dict) -> dict:
     if scan_id <= 0:
         return {"audit_paths": []}
     reclaim_expired(scan_id, get_settings().path_lease_s)
-    paths = claim_paths(scan_id, get_settings().audit_batch,
-                        get_settings().path_lease_s)
+    paths = claim_paths(
+        scan_id, get_settings().audit_batch, get_settings().path_lease_s,
+        max_paths=get_settings().audit_max_paths,
+        entry_only_max=get_settings().audit_entry_only_max,
+        priority=get_settings().audit_priority,
+        max_attempts=get_settings().audit_path_attempts_max,
+    )
     return {"audit_paths": paths}
 
 
@@ -97,6 +102,14 @@ def run_audit_collect(state: dict) -> dict:
             continue
         path = next((p for p in (state.get("audit_paths") or [])
                      if p.get("id") == item.get("path_id")), None)
+        if path is None:
+            continue
+        # 只对 finding 或首轮 proven 未决路径做兄弟扩展；避免无 LLM 时
+        # need_more → sibling → need_more 的指数膨胀。
+        if item.get("status") == "pending" and (
+            path.get("feasibility") != "proven" or int(path.get("round") or 0) > 0
+        ):
+            continue
         if path:
             paths.extend(sibling_paths(project, path))
     inserted = (enqueue_paths(int(state.get("scan_id") or 0), paths, expand_round)
@@ -104,7 +117,13 @@ def run_audit_collect(state: dict) -> dict:
     # 只有产生了新的扩展路径才推进“轮次”；否则只是在同一轮内消费批次
     round_no = expand_round if inserted else int(state.get("audit_round") or 0)
     settings = get_settings()
-    _write_round(int(state.get("scan_id") or 0), round_no, inserted, state)
+    _write_round(int(state.get("scan_id") or 0), round_no, inserted, state, batch_no)
+    try:
+        from codesentry.control.audit_paths import coverage as _coverage
+
+        cover = _coverage(int(state.get("scan_id") or 0))
+    except Exception:  # noqa: BLE001
+        cover = {}
     candidates: list[dict] = []
     seen: set[tuple] = set()
     for item in state.get("path_results") or []:
@@ -135,10 +154,11 @@ def run_audit_collect(state: dict) -> dict:
                      f"audit batch {batch_no} (round {round_no}): +{inserted} paths"],
         "coverage": {
             **(state.get("coverage") or {}),
+            **cover,
             "round": round_no,
             "batch": batch_no,
             "new_paths": inserted,
-            "pending": 1 if inserted else 0,
+            "pending": cover.get("pending", 0),
             "max_rounds": settings.audit_max_rounds,
         },
     }
@@ -153,6 +173,28 @@ def route_after_collect(state: dict) -> str:
     if round_no >= get_settings().audit_max_rounds:
         return "triage"
     return "audit_plan"
+
+
+def _hint_for_path(state: dict, path: dict) -> dict:
+    sink = str(path.get("sink_key") or "")
+    file = ""
+    line = 0
+    path_part = sink.split("#", 1)[0]
+    for prefix in ("sink:", "function:", "method:", "source:"):
+        if path_part.startswith(prefix):
+            file = path_part[len(prefix):]
+            break
+    try:
+        if "@" in sink:
+            line = int(sink.rsplit("@", 1)[-1])
+    except ValueError:
+        line = 0
+    for hint in state.get("engine_hints") or []:
+        if not hint.get("file") or not hint.get("line"):
+            continue
+        if str(hint["file"]) == file and int(hint["line"]) == line:
+            return hint
+    return {}
 
 
 def run_audit_finalize(state: dict) -> dict:
@@ -176,15 +218,22 @@ def run_audit_finalize(state: dict) -> dict:
         if path.get("feasibility") not in ("proven", "likely"):
             continue
         evidence = path.get("evidence") or {}
+        hint = _hint_for_path(state, path)
         candidates.append({
             **_to_finding(path, {
-                "cwe": evidence.get("cwe") or 610,
-                "severity": evidence.get("severity") or "medium",
-                "confidence": min(float(evidence.get("confidence") or 0.35), 0.35),
-                "reason": evidence.get("reason") or "路径未完成审计，按可疑保留",
+                "cwe": hint.get("cwe") or evidence.get("cwe") or 610,
+                "severity": hint.get("severity") or evidence.get("severity") or "medium",
+                "confidence": min(float(evidence.get("confidence") or 0.4), 0.4),
+                "reason": hint.get("message") or evidence.get("reason")
+                or "路径未完成审计，按可疑保留",
                 "fix_advice": evidence.get("fix_advice") or "",
+                "engine_hint": hint or None,
             }),
             "path_id": path["id"], "path_nodes": path.get("nodes"),
+            "taint_metadata": {
+                "path_id": path["id"], "path_nodes": path.get("nodes"),
+                "engine_hint": hint or None,
+            },
         })
     return {
         "candidate_findings": candidates,
@@ -193,7 +242,8 @@ def run_audit_finalize(state: dict) -> dict:
     }
 
 
-def _write_round(scan_id: int, round_no: int, new_paths: int, state: dict) -> None:
+def _write_round(scan_id: int, round_no: int, new_paths: int, state: dict,
+                 batch_no: int = 0) -> None:
     try:
         from codesentry.db.pool import get_conn
 
@@ -203,12 +253,12 @@ def _write_round(scan_id: int, round_no: int, new_paths: int, state: dict) -> No
             total = int(cur.fetchone()[0])
             cur.execute(
                 "INSERT INTO audit_rounds (scan_id, round, paths_total, paths_new,"
-                " paths_audited, findings, finished_at)"
-                " VALUES (%s,%s,%s,%s,%s,%s,now())"
+                " paths_audited, findings, batch, finished_at)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,now())"
                 " ON CONFLICT (scan_id, round) DO UPDATE SET paths_total=EXCLUDED.paths_total,"
                 " paths_new=EXCLUDED.paths_new, paths_audited=EXCLUDED.paths_audited,"
-                " findings=EXCLUDED.findings, finished_at=now()",
-                (scan_id, round_no, total, new_paths, len(results),
+                " findings=EXCLUDED.findings, batch=EXCLUDED.batch, finished_at=now()",
+                (scan_id, round_no, total, new_paths, len(results), batch_no,
                  sum(1 for r in results if r.get("status") == "finding")),
             )
             conn.commit()

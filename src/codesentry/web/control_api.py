@@ -278,6 +278,85 @@ async def put_agent(name: str, payload: AgentPatch) -> dict:
     return {"agent": cfg}
 
 
+class ComparePayload(BaseModel):
+    state: dict = {}
+    prompt_a: int | None = None
+    prompt_b: int | None = None
+    preset_a: int | None = None
+    preset_b: int | None = None
+    use_llm: bool = False
+
+
+def _compare_prompt(agent: str, *, version: int | None, preset_id: int | None,
+                    variables: dict) -> dict:
+    from codesentry.agents.prompts import SEED_PROMPTS, compose_prompt
+    from codesentry.control.agent_presets import get_preset
+    from codesentry.control.prompts import get_active, get_version
+
+    if preset_id:
+        preset = get_preset(int(preset_id))
+        if not preset:
+            raise ValueError("preset 不存在")
+        if preset["base_agent"] != agent:
+            raise ValueError("preset base_agent 不匹配")
+        body = compose_prompt(agent, preset["system_prompt"], variables, force_tail=True)
+        return {"label": f"preset:{preset_id}", "body": body,
+                "version": None, "preset_id": preset_id}
+    if version is not None:
+        pv = get_version(agent, int(version))
+        if not pv:
+            raise ValueError(f"prompt 版本不存在：{version}")
+        return {"label": f"v{version}",
+                "body": compose_prompt(agent, pv["body"], variables),
+                "version": int(version), "preset_id": None}
+    active = get_active(agent)
+    if active:
+        return {"label": f"v{active['version']}",
+                "body": compose_prompt(agent, active["body"], variables),
+                "version": int(active["version"]), "preset_id": None}
+    return {"label": "seed", "body": compose_prompt(agent, SEED_PROMPTS.get(agent, ""), variables),
+            "version": None, "preset_id": None}
+
+
+@app.post("/api/agents/{name}/compare")
+async def compare_agent_prompts(name: str, payload: ComparePayload) -> dict:
+    _require_agent(name)
+    import difflib
+
+    variables = {"agent": name, "scan_id": "0"}
+    try:
+        a = _compare_prompt(name, version=payload.prompt_a, preset_id=payload.preset_a,
+                            variables=variables)
+        b = _compare_prompt(name, version=payload.prompt_b, preset_id=payload.preset_b,
+                            variables=variables)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    result: dict[str, Any] = {
+        "agent": name,
+        "a": {**a, "token_est": len(a["body"]) // 4},
+        "b": {**b, "token_est": len(b["body"]) // 4},
+        "diff": "\n".join(difflib.unified_diff(
+            a["body"].splitlines(), b["body"].splitlines(),
+            fromfile=a["label"], tofile=b["label"], lineterm="",
+        )),
+        "used_llm": False,
+    }
+    if payload.use_llm:
+        from codesentry.agents.llm import LLMClient
+
+        client = LLMClient.for_agent(name, scan_id=0)
+        user = __import__("json").dumps(payload.state or {}, ensure_ascii=False)[:12000]
+        for key in ("a", "b"):
+            try:
+                result[key]["output"] = client.complete(
+                    result[key]["body"], user, model_role="deep"
+                )[:4000]
+            except Exception as e:  # noqa: BLE001
+                result[key]["error"] = str(e)[:200]
+        result["used_llm"] = True
+    return result
+
+
 @app.get("/api/agents/{name}/stats")
 async def agent_stats(name: str, days: int = 30) -> dict:
     _require_agent(name)
@@ -508,10 +587,120 @@ async def run_prompt_eval(payload: EvalRunPayload) -> dict:
         raise HTTPException(503, f"评测失败：{str(e)[:200]}") from e
 
 
+class AgentPresetPayload(BaseModel):
+    name: str
+    base_agent: str
+    description: str = ""
+    system_prompt: str
+    tools_allow: list[str] = []
+    skills_allow: list[str] = []
+    capabilities: dict = {}
+    enabled: bool = True
+
+
+class AgentPresetPatch(BaseModel):
+    name: str | None = None
+    base_agent: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    tools_allow: list[str] | None = None
+    skills_allow: list[str] | None = None
+    capabilities: dict | None = None
+    enabled: bool | None = None
+
+
+class BindPresetPayload(BaseModel):
+    preset_id: int | None = None
+
+
+@app.get("/api/agent-presets")
+async def list_agent_presets(base_agent: str = "") -> dict:
+    from codesentry.control.agent_presets import list_presets
+
+    return {"presets": list_presets(base_agent)}
+
+
+@app.post("/api/agent-presets")
+async def create_agent_preset(payload: AgentPresetPayload) -> dict:
+    from codesentry.control.agent_presets import create_preset
+
+    try:
+        return create_preset(payload.name, payload.base_agent,
+                             description=payload.description,
+                             system_prompt=payload.system_prompt,
+                             tools_allow=payload.tools_allow,
+                             skills_allow=payload.skills_allow,
+                             capabilities=payload.capabilities,
+                             enabled=payload.enabled)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.put("/api/agent-presets/{preset_id}")
+async def update_agent_preset(preset_id: int, payload: AgentPresetPatch) -> dict:
+    from codesentry.control.agent_presets import update_preset
+
+    try:
+        out = update_preset(preset_id, payload.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if out is None:
+        raise HTTPException(404)
+    return out
+
+
+@app.delete("/api/agent-presets/{preset_id}")
+async def delete_agent_preset(preset_id: int) -> dict:
+    from codesentry.control.agent_presets import delete_preset
+
+    if not delete_preset(preset_id):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.post("/api/agents/{name}/bind-preset")
+async def bind_agent_preset(name: str, payload: BindPresetPayload) -> dict:
+    _require_agent(name)
+    from codesentry.control.agent_presets import bind_preset
+
+    try:
+        out = bind_preset(name, payload.preset_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if out is None:
+        raise HTTPException(503, "绑定失败")
+    return {"agent": out}
+
+
+class ConfigImportPayload(BaseModel):
+    doc: dict
+    mode: str = "merge"
+
+
+@app.get("/api/config/export")
+async def export_config() -> dict:
+    from codesentry.control.config_io import export_config as _export
+
+    return _export()
+
+
+@app.post("/api/config/import")
+async def import_config(payload: ConfigImportPayload) -> dict:
+    from codesentry.control.config_io import import_config as _import
+
+    try:
+        return _import(payload.doc, payload.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 class WebhookPayload(BaseModel):
-    url: str
+    name: str = ""
+    kind: str = "generic"
+    url: str = ""
     secret: str = ""
     events: list[str] = ["*"]
+    headers: dict[str, str] = {}
 
 
 @app.get("/api/webhooks")
@@ -526,7 +715,8 @@ async def create_webhook(payload: WebhookPayload) -> dict:
     from codesentry.control.webhooks import create_webhook as _create
 
     try:
-        out = _create(payload.url, payload.secret, payload.events)
+        out = _create(payload.url, payload.secret, payload.events,
+                      name=payload.name, kind=payload.kind, headers=payload.headers)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     if out is None:
@@ -541,6 +731,18 @@ async def delete_webhook(webhook_id: int) -> dict:
     if not _delete(webhook_id):
         raise HTTPException(404)
     return {"ok": True}
+
+
+@app.post("/api/webhooks/{webhook_id}/test")
+async def test_webhook_endpoint(webhook_id: int) -> dict:
+    from codesentry.control.webhooks import test_webhook
+
+    try:
+        return test_webhook(webhook_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:200]}
 
 
 @app.get("/api/graph-templates")
@@ -847,6 +1049,23 @@ async def ops_disk() -> dict:
     from codesentry.control.retention import disk_usage
 
     return await run_in_threadpool(disk_usage)
+
+
+class MaintenancePayload(BaseModel):
+    days: int = 30
+    codeql_days: int = 7
+    orphan_days: int = 7
+    clean_images: bool = False
+
+
+@app.post("/api/ops/maintenance")
+async def ops_maintenance(payload: MaintenancePayload) -> dict:
+    from codesentry.control.retention import run_maintenance
+
+    return await run_in_threadpool(
+        run_maintenance, days=payload.days, codeql_days=payload.codeql_days,
+        orphan_days=payload.orphan_days, clean_images=payload.clean_images,
+    )
 
 
 @app.get("/api/health")
