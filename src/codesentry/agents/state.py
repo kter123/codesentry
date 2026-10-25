@@ -39,6 +39,7 @@ class AuditState(TypedDict, total=False):
     audit_round: int
     audit_batch: int
     coverage: dict
+    supervisor: dict
     # triage
     triaged_findings: list  # 保留/降级/否决后（dict）
     evidence: dict  # finding_iid -> {'code_slices': [...], 'kb': [...], 'vuln_cases': [...]}

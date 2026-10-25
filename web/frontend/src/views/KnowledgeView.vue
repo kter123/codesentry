@@ -125,6 +125,10 @@ const rebuilding = ref(false)
 const searching = ref(false)
 const importing = ref(false)
 const previewing = ref(false)
+const packs = ref<Array<Record<string, unknown>>>([])
+const packsLoading = ref(false)
+const packSaving = ref(false)
+const packForm = reactive({ name: '', kind: 'vuln', lang: '', framework: '', cwe: 0, content: '' })
 const error = ref('')
 const stats = ref<KbStats>({})
 const query = ref('')
@@ -135,6 +139,40 @@ const chunkSource = ref('')
 const previewVisible = ref(false)
 const previewChunks = ref<Array<Record<string, unknown>>>([])
 const form = reactive({ source: '', title: '', content: '' })
+
+async function loadPacks(): Promise<void> {
+  packsLoading.value = true
+  try {
+    const res = await api.get<{ packs?: Array<Record<string, unknown>> }>('/api/knowledge-packs')
+    packs.value = res.packs || []
+  } catch {
+    packs.value = []
+  } finally {
+    packsLoading.value = false
+  }
+}
+
+async function addPack(): Promise<void> {
+  packSaving.value = true
+  try {
+    await api.post('/api/knowledge-packs', packForm)
+    Object.assign(packForm, { name: '', kind: 'vuln', lang: '', framework: '', cwe: 0, content: '' })
+    await loadPacks()
+  } catch (e) {
+    ElMessage.error(errorMessage(e))
+  } finally {
+    packSaving.value = false
+  }
+}
+
+async function togglePack(row: Record<string, unknown>): Promise<void> {
+  try {
+    await api.put(`/api/knowledge-packs/${row.id}`, { enabled: !row.enabled })
+    await loadPacks()
+  } catch (e) {
+    ElMessage.error(errorMessage(e))
+  }
+}
 
 async function load(): Promise<void> {
   loading.value = true
@@ -257,7 +295,7 @@ async function importText(): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(() => { void load(); void loadPacks() })
 </script>
 
 <style scoped>

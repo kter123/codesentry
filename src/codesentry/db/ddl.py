@@ -598,6 +598,74 @@ CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.verification_runs (
 CREATE INDEX IF NOT EXISTS verification_runs_scan_idx
     ON {BUSINESS_SCHEMA}.verification_runs (scan_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.agent_events (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT NOT NULL,
+    seq BIGINT NOT NULL,
+    event_type TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    phase TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{{}}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scan_id, seq)
+);
+CREATE INDEX IF NOT EXISTS agent_events_scan_idx
+    ON {BUSINESS_SCHEMA}.agent_events (scan_id, seq);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.agent_nodes (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT NOT NULL,
+    agent_key TEXT NOT NULL,
+    parent_key TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL DEFAULT '',
+    phase TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'running',
+    tokens INT NOT NULL DEFAULT 0,
+    tool_calls INT NOT NULL DEFAULT 0,
+    started_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    summary TEXT NOT NULL DEFAULT '',
+    UNIQUE (scan_id, agent_key)
+);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.scan_controls (
+    scan_id BIGINT PRIMARY KEY,
+    paused BOOLEAN NOT NULL DEFAULT FALSE,
+    stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    reason TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.knowledge_packs (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'vuln',
+    lang TEXT NOT NULL DEFAULT '',
+    framework TEXT NOT NULL DEFAULT '',
+    cwe INT NOT NULL DEFAULT 0,
+    version INT NOT NULL DEFAULT 1,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'builtin',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (name, version)
+);
+
+CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.tool_runs (
+    id BIGSERIAL PRIMARY KEY,
+    scan_id BIGINT NOT NULL,
+    tool TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ok',
+    args JSONB NOT NULL DEFAULT '{{}}',
+    result JSONB NOT NULL DEFAULT '{{}}',
+    evidence JSONB NOT NULL DEFAULT '[]',
+    duration_ms INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tool_runs_scan_idx
+    ON {BUSINESS_SCHEMA}.tool_runs (scan_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS {BUSINESS_SCHEMA}.review_comments (
     id BIGSERIAL PRIMARY KEY,
     scan_id BIGINT NOT NULL REFERENCES {BUSINESS_SCHEMA}.scans(id) ON DELETE CASCADE,

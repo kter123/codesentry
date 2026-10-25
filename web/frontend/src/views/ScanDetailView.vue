@@ -13,7 +13,10 @@
           <el-icon><Refresh /></el-icon>
           <span>刷新</span>
         </el-button>
-        <el-button type="primary" @click="assistVisible = true">问 AI</el-button>
+        <el-button type="primary" @click="$router.push(`/scans/${scanId}/workbench`)">
+          审计工作台
+        </el-button>
+        <el-button @click="assistVisible = true">问 AI</el-button>
       </template>
     </page-header>
 

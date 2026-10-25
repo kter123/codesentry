@@ -11,6 +11,7 @@
 - 2026-10-23 管理面（M1–M2）：Prompt 三段式（可编辑正文 + 代码固定尾 + 变量）、Agent 工具/技能白名单、LLM 优先级池与熔断、原始调用记录。
 - 2026-10-24 路径中心审计：引擎→图 → sink 反向路径 → 多轮 Agent 路径审计 → Triage → DeployAgent → PoC；Agent/Prompt 全可配置；RAG 工具化。
 - 2026-10-24 引擎 Dataflow 入图：Joern calls/dataflow、CodeQL codeFlows 写入图；entry-only 入口审计路径；本地 bge-m3（1024 维）真实入库。
+- 2026-10-25 统一审计框架：Supervisor 白名单调度、agent_events/SSE/Agent 树、暂停恢复停止、Vue3 审计工作台、Harness 模板/全语言命令、工具网关、知识包、即时分析/HTML 报告/证据包。
 - 2026-10-25 P2 安全扩展：部署 Agent 自动依赖（MySQL/Redis/PostgreSQL）、JS 匿名回调节点、CodeQL 预授权自动安装、修复建议（只产 patch）、受限远程目标只读探测；交互式/反弹 shell 明确不实现。
 - 2026-10-25 P0/P1 收口：CodeQL 多语言全链路（Java/Python/JS）、路径级 PoC、路径抽屉与图高亮、审计成本上限、通知渠道（飞书/钉钉/企微/邮件）、项目/定时扫描、自定义 Agent Preset、Agent 试跑对比、配置导入导出、报告路径图、图包聚合、生命周期维护、SDK 补全。
 

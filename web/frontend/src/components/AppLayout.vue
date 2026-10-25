@@ -69,6 +69,7 @@ import {
   Connection,
   Cpu,
   DataLine,
+  Lightning,
   DocumentChecked,
   EditPen,
   Expand,
@@ -92,6 +93,7 @@ const isCollapse = ref(false)
 
 const menuItems = [
   { path: '/', label: '概览', icon: Odometer },
+  { path: '/instant', label: '即时分析', icon: Lightning },
   { path: '/scans', label: '扫描管理', icon: Search },
   { path: '/projects', label: '项目与定时', icon: Calendar },
   { path: '/reviews', label: '复核队列', icon: DocumentChecked },

@@ -109,6 +109,12 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
 
     budget = BudgetGuard(scan_id=scan_id)
     holder = {"scan_id": scan_id, "budget": budget, "snapshot": snapshot}
+    try:
+        from codesentry.control.scan_control import reset as reset_scan_control
+
+        reset_scan_control(scan_id)
+    except Exception:  # noqa: BLE001, S110
+        pass
 
     try:
         st = new_state(repo, OSS, scan_id=scan_id)
@@ -151,13 +157,16 @@ def run_scan_graph(repo: str, OSS: bool, out_dir: str, scan_id: int | None = Non
         if cp_ctx is not None:
             cp_ctx.__exit__(None, None, None)
     except Exception as e:  # noqa: BLE001 - 主流程异常落因
-        typer.echo(f"scan 失败：{e}", err=True)
+        from codesentry.control.scan_control import ScanStopped
+
+        stopped = isinstance(e, ScanStopped)
+        typer.echo(f"scan {'stopped' if stopped else '失败'}：{e}", err=True)
         if scan_id:
             try:
                 with get_conn() as conn, conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE scans SET status='failed', error_reason=%s WHERE id=%s",
-                        (str(e)[:500], scan_id),
+                        "UPDATE scans SET status=%s, error_reason=%s WHERE id=%s",
+                        ("stopped" if stopped else "failed", str(e)[:500], scan_id),
                     )
                     conn.commit()
             except Exception:  # noqa: BLE001, S110

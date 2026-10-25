@@ -120,19 +120,48 @@ def run_harness(code: str, language: str, *, image: str = "",
 
 
 def generate_harness(llm, finding: dict, source: str, graph: dict | None = None) -> dict:
+    from codesentry.control.harness_templates import for_cwe
+
+    template = for_cwe(int(finding.get("cwe") or 0))
     user = json.dumps({"finding": finding, "source": source[:16000],
-                       "graph": graph or {}}, ensure_ascii=False)[:20000]
+                       "graph": graph or {}, "template": template},
+                      ensure_ascii=False)[:20000]
     text = llm.complete(HARNESS_SYSTEM, user, model_role="deep")
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("LLM 未返回 Harness JSON")
     data = json.loads(match.group(0))
-    code = str(data.get("code") or "")
+    code: str = str(data.get("code") or "")
     if not code.strip():
         raise ValueError(str(data.get("summary") or "LLM 未生成 Harness 代码"))
     return {"language": _language(data.get("language")),
             "code": code[:30000], "summary": str(data.get("summary") or "")[:1000],
             "payloads": data.get("payloads") or []}
+
+
+def extract_function(project: str, file: str, line: int, function: str = "") -> dict:
+    from pathlib import Path
+
+    from codesentry.rag.graph_query import node, node_for_location
+
+    key = ""
+    if function:
+        found = node(project, function)
+        key = str(found.get("key") or "") if found else ""
+    if not key:
+        key = node_for_location(project, file, int(line or 0)) or ""
+    found = node(project, key) if key else None
+    if not found:
+        return {"ok": False, "error": "function not found", "file": file, "line": line}
+    root = Path(project)
+    try:
+        lines = (root / found["path"]).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return {"ok": False, "error": str(e), "node": found}
+    start = max(1, int(found.get("start") or 1))
+    end = min(len(lines), int(found.get("end") or start + 120))
+    return {"ok": True, "node": found,
+            "source": "\n".join(f"{i}: {lines[i - 1]}" for i in range(start, end + 1))[:24000]}
 
 
 def save_run(scan_id: int, finding_id: int | None, path_id: int | None,

@@ -23,13 +23,17 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
     status = status_override or "ok"
     error = ""
     run = NodeRun(tokens=tokens, tool_calls=tool_calls)
+    agent_key = f"{node}:{start_at.isoformat()}"
+    publish = None
     try:
-        from codesentry.orchestrator.events import publish
+        from codesentry.orchestrator.events import publish_event, upsert_agent_node
 
-        publish(scan_id, {"event": "node.start", "scan_id": scan_id, "node": node,
-                          "at": start_at.isoformat()})
+        publish_event(scan_id, "node.start", agent=node, phase=node,
+                      payload={"node": node, "started_at": start_at.isoformat()})
+        upsert_agent_node(scan_id, agent_key, name=node, phase=node, status="running")
+        publish = publish_event
     except Exception:  # noqa: BLE001
-        publish = None  # type: ignore[assignment]
+        publish = None
     try:
         yield run
     except Exception as e:
@@ -57,10 +61,15 @@ def node_run(scan_id: int, node: str, tokens: int = 0, tool_calls: int = 0,
             pass
         if publish is not None:
             try:
-                publish(scan_id, {
-                    "event": "node.end", "scan_id": scan_id, "node": node,
-                    "status": status, "duration_ms": duration_ms,
+                from codesentry.orchestrator.events import upsert_agent_node
+
+                publish(scan_id, "node.end", agent=node, phase=node, payload={
+                    "node": node, "status": status, "duration_ms": duration_ms,
                     "tokens": run.tokens or 0, "error": error,
                 })
+                upsert_agent_node(scan_id, agent_key, name=node, phase=node,
+                                  status=status, tokens=run.tokens or 0,
+                                  tool_calls=run.tool_calls or 0,
+                                  summary=error or f"{duration_ms}ms")
             except Exception:  # noqa: BLE001, S110
                 pass

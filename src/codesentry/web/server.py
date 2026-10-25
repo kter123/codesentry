@@ -45,6 +45,7 @@ from codesentry.web import (
     control_api,  # noqa: F401
     graph_api,  # noqa: F401
     projects_api,  # noqa: F401
+    runtime_api,  # noqa: F401
 )
 
 WORK_ROOT = Path(os.environ.get("CODESENTRY_WORK_DIR", "work"))
@@ -696,7 +697,7 @@ if STATIC_DIR.exists():
     _SPA_SEGMENTS = {
         "agents", "rules", "skills", "prompts", "reviews", "scans", "review",
         "llm", "usage", "orchestration", "audit", "settings", "users", "login",
-        "projects",
+        "projects", "instant",
     }
 
     @app.get("/{spa_path:path}")

@@ -36,12 +36,15 @@ class Settings(BaseSettings):
     path_min_score: float = 0.2
     path_lease_s: int = 900
     scheduler_enabled: bool = True
+    pause_max_s: int = 300
     poc_remote_enabled: bool = False
     poc_remote_allow_private: bool = False
     harness_image: str = "python:3.12-slim"
     harness_timeout_s: int = 90
     harness_allow_network: bool = False
     harness_pull_policy: Literal["never", "missing", "always"] = "missing"
+    tool_allow_network: bool = False
+    tool_timeout_s: int = 300
     scheduler_interval_s: int = 30
 
     # llm (D5, D14)

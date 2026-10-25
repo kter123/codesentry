@@ -38,6 +38,12 @@ const router = createRouter({
           meta: { title: '概览' },
         },
         {
+          path: 'instant',
+          name: 'instant',
+          component: () => import('@/views/InstantAnalysisView.vue'),
+          meta: { title: '即时分析' },
+        },
+        {
           path: 'scans',
           name: 'scans',
           component: () => import('@/views/ScansView.vue'),
@@ -54,6 +60,12 @@ const router = createRouter({
           name: 'scan-detail',
           component: () => import('@/views/ScanDetailView.vue'),
           meta: { title: '扫描详情', activeMenu: '/scans' },
+        },
+        {
+          path: 'scans/:id/workbench',
+          name: 'scan-workbench',
+          component: () => import('@/views/WorkbenchView.vue'),
+          meta: { title: '审计工作台', activeMenu: '/scans' },
         },
         {
           path: 'scans/:id/graph',

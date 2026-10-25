@@ -22,6 +22,11 @@ def _wrap(node_name: str, fn, scan_id_holder: dict):
 
     def inner(state: AuditState) -> dict:
         sid = scan_id_holder.get("scan_id") or 0
+        if sid:
+            from codesentry.config import get_settings
+            from codesentry.control.scan_control import wait_if_paused
+
+            wait_if_paused(int(sid), int(get_settings().pause_max_s))
         bc = scan_id_holder.get("budget")
         if cfg_name in {"recon", "scan", "audit", "deploy", "report"}:
             try:
@@ -200,7 +205,6 @@ def build_graph(
     g = StateGraph(AuditState)
 
     from codesentry.agents.path_audit_nodes import (
-        route_after_collect,
         route_audit,
         run_audit_collect,
         run_audit_finalize,
@@ -208,11 +212,13 @@ def build_graph(
         run_audit_plan,
         run_path_build,
     )
+    from codesentry.agents.supervisor import route_supervisor, run_supervisor
 
     g.add_node("recon", _wrap("recon", recon_agent, holder))
     g.add_node("graph_build", _wrap("graph_build", graph_build_agent, holder))
     g.add_node("scan", _wrap("scan", scan_agent, holder))
     g.add_node("path_build", _wrap("path_build", run_path_build, holder))
+    g.add_node("supervisor", _wrap("supervisor", run_supervisor, holder))
     g.add_node("audit_plan", _wrap("audit_plan", run_audit_plan, holder))
     g.add_node("audit_path", _wrap("audit_path", run_audit_path, holder))
     g.add_node("audit_collect", _wrap("audit_collect", run_audit_collect, holder))
@@ -228,22 +234,26 @@ def build_graph(
     g.add_edge("recon", "graph_build")
     g.add_edge("graph_build", "scan")
     g.add_edge("scan", "path_build")
-    g.add_edge("path_build", "audit_plan")
+    g.add_edge("path_build", "supervisor")
+
     def _route_audit(state: AuditState):
-        if not (state.get("audit_paths") or []) and audit_agent is not None:
-            return "audit_finalize"
+        if not (state.get("audit_paths") or []):
+            return "supervisor"
         return route_audit(dict(state))
 
     g.add_conditional_edges(
         "audit_plan", _route_audit,
-        {"audit_path": "audit_path", "triage": "triage", "audit_finalize": "audit_finalize"},
+        {"audit_path": "audit_path", "triage": "triage",
+         "audit_finalize": "audit_finalize", "supervisor": "supervisor"},
     )
     g.add_edge("audit_path", "audit_collect")
+    g.add_edge("audit_collect", "supervisor")
+    g.add_edge("audit_finalize", "supervisor")
     g.add_conditional_edges(
-        "audit_collect", route_after_collect,
-        {"audit_plan": "audit_plan", "triage": "triage", "audit_finalize": "audit_finalize"},
+        "supervisor", route_supervisor,
+        {"audit_plan": "audit_plan", "audit_finalize": "audit_finalize",
+         "triage": "triage", "report": "report"},
     )
-    g.add_edge("audit_finalize", "triage")
 
     def _route_triage(state: AuditState) -> str:
         nxt = route_after_triage(state)

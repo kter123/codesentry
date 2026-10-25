@@ -55,17 +55,20 @@ try {
     scans = []
   }
   const routes = [
-    '/ui/', '/ui/scans', '/ui/projects', '/ui/reviews', '/ui/agents',
+    '/ui/', '/ui/scans', '/ui/projects', '/ui/instant', '/ui/reviews', '/ui/agents',
     '/ui/agents/recon', '/ui/llm', '/ui/usage', '/ui/prompts', '/ui/skills',
     '/ui/kb', '/ui/rules', '/ui/orchestration', '/ui/audit', '/ui/settings',
     '/ui/users', '/ui/login',
   ]
-  if (Array.isArray(scans) && scans.length) {
-    routes.push(`/ui/scans/${scans[0].id}`, `/ui/scans/${scans[0].id}/graph`)
+  const smokeScan = Array.isArray(scans)
+    ? (scans.find((s) => String(s.repo_path || '').includes('/codesentry/work/')) || scans[0])
+    : null
+  if (smokeScan) {
+    routes.push(`/ui/scans/${smokeScan.id}`, `/ui/scans/${smokeScan.id}/workbench`, `/ui/scans/${smokeScan.id}/graph`)
     try {
-      const paths = await (await fetch(`${BASE}/api/scans/${scans[0].id}/paths?limit=1`)).json()
+      const paths = await (await fetch(`${BASE}/api/scans/${smokeScan.id}/paths?limit=1`)).json()
       if (paths.paths?.length) {
-        routes.push(`/ui/scans/${scans[0].id}/graph?path_id=${paths.paths[0].id}`)
+        routes.push(`/ui/scans/${smokeScan.id}/graph?path_id=${paths.paths[0].id}`)
       }
     } catch {
       // path route is optional
@@ -98,9 +101,9 @@ try {
       console_errors: consoleErrors.slice(before),
     })
   }
-  if (Array.isArray(scans) && scans.length) {
+  if (smokeScan) {
     try {
-      const sid = scans[0].id
+      const sid = smokeScan.id
       await page.goto(`${BASE}/ui/scans/${sid}`, { waitUntil: 'domcontentloaded' })
       await page.locator('#tab-paths').click()
       await page.waitForTimeout(600)
@@ -119,7 +122,7 @@ try {
       }
     } catch (e) {
       results.push({
-        route: `/ui/scans/${scans[0].id}#path-drawer`,
+        route: `/ui/scans/${smokeScan.id}#path-drawer`,
         ok: false,
         title: '',
         text: `ERROR: ${String(e).slice(0, 200)}`,

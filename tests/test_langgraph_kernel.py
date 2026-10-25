@@ -79,7 +79,7 @@ def test_interrupt_and_resume_roundtrip():
 
     g = build_graph(
         recon_agent=lambda s: {"profile": {}},
-        scan_agent=lambda s: {"engine_findings": [{"rule_id": "x", "line": 1, "confidence": 0.5}]},
+        scan_agent=lambda s: {"engine_findings": [{"rule_id": "x", "file": "x.py", "line": 1, "confidence": 0.5}]},
         retrieval_agent=lambda s: {"evidence": {}},
         triage_agent=lambda s: {"triaged_findings": [{"rule_id": "x", "line": 1}], "phase": "human_review"},
         poc_agent=poc,

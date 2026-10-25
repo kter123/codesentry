@@ -747,6 +747,184 @@ async def probe_poc_target(target_id: int) -> dict:
         raise HTTPException(403, str(e)) from e
 
 
+class KnowledgePackPayload(BaseModel):
+    name: str
+    content: str
+    kind: str = "vuln"
+    lang: str = ""
+    framework: str = ""
+    cwe: int = 0
+
+
+class KnowledgePackPatch(BaseModel):
+    name: str | None = None
+    content: str | None = None
+    kind: str | None = None
+    lang: str | None = None
+    framework: str | None = None
+    cwe: int | None = None
+    enabled: bool | None = None
+
+
+@app.get("/api/knowledge-packs")
+async def knowledge_packs(kind: str = "") -> dict:
+    from codesentry.control.knowledge_packs import list_packs, seed_builtins
+
+    seed_builtins()
+    return {"packs": list_packs(kind)}
+
+
+@app.post("/api/knowledge-packs")
+async def create_knowledge_pack(payload: KnowledgePackPayload) -> dict:
+    from codesentry.control.knowledge_packs import create_pack
+
+    try:
+        return create_pack(payload.name, payload.content, kind=payload.kind,
+                           lang=payload.lang, framework=payload.framework,
+                           cwe=payload.cwe)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.put("/api/knowledge-packs/{pack_id}")
+async def update_knowledge_pack(pack_id: int, payload: KnowledgePackPatch) -> dict:
+    from codesentry.control.knowledge_packs import update_pack
+
+    out = update_pack(pack_id, payload.model_dump(exclude_unset=True))
+    if out is None:
+        raise HTTPException(404)
+    return out
+
+
+@app.delete("/api/knowledge-packs/{pack_id}")
+async def delete_knowledge_pack(pack_id: int) -> dict:
+    from codesentry.control.knowledge_packs import delete_pack
+
+    if not delete_pack(pack_id):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+class InstantAnalysisPayload(BaseModel):
+    code: str
+    filename: str = "snippet.py"
+    oss: bool = False
+
+
+@app.post("/api/instant-analysis")
+async def instant_analysis(payload: InstantAnalysisPayload) -> dict:
+    import uuid
+    from pathlib import Path
+
+    from codesentry.web.server import _insert_scan, _run_scan_bg, _work_root
+
+    if len(payload.code.encode("utf-8")) > 200_000:
+        raise HTTPException(413, "code too large")
+    name = Path(payload.filename or "snippet.py").name
+    job = uuid.uuid4().hex[:10]
+    repo = _work_root() / f"instant-{job}" / "src"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(payload.code, encoding="utf-8")
+    scan_id = _insert_scan(str(repo), bool(payload.oss))
+    out_dir = str(_work_root() / f"instant-{job}" / "codesentry-report")
+    _run_scan_bg(scan_id, str(repo), bool(payload.oss), out_dir)
+    return {"ok": True, "scan_id": scan_id, "repo": str(repo)}
+
+
+@app.get("/api/dashboard")
+async def dashboard() -> dict:
+    from codesentry.db.pool import get_conn
+
+    out: dict = {}
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM scans")
+            out["scans"] = int(cur.fetchone()[0])
+            cur.execute("SELECT count(*) FROM findings")
+            out["findings"] = int(cur.fetchone()[0])
+            cur.execute("SELECT verdict,count(*) FROM findings GROUP BY verdict")
+            out["by_verdict"] = {str(k or "candidate"): int(v) for k, v in cur.fetchall()}
+            cur.execute("SELECT status,count(*) FROM audit_paths GROUP BY status")
+            out["paths"] = {str(k): int(v) for k, v in cur.fetchall()}
+            cur.execute("SELECT count(*) FROM verification_runs WHERE verdict='verified'")
+            out["verified_runs"] = int(cur.fetchone()[0])
+            cur.execute("SELECT coalesce(sum(tokens),0) FROM node_runs")
+            out["tokens"] = int(cur.fetchone()[0] or 0)
+            cur.execute("SELECT tool,status,count(*) FROM tool_runs GROUP BY tool,status")
+            out["tools"] = [{"tool": r[0], "status": r[1], "count": int(r[2])}
+                            for r in cur.fetchall()]
+    except Exception as e:  # noqa: BLE001
+        out["error"] = str(e)[:200]
+    return out
+
+
+@app.get("/api/scans/{scan_id}/report/html")
+async def report_html(scan_id: int):
+    from pathlib import Path
+
+    from fastapi.responses import HTMLResponse
+
+    from codesentry.db.pool import get_conn
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT report_dir FROM scans WHERE id=%s", (int(scan_id),))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404)
+    path = Path(str(row[0] or "")) / "report.md"
+    if not path.is_file():
+        raise HTTPException(404, "report not ready")
+    import html
+
+    body = html.escape(path.read_text(encoding="utf-8", errors="replace"))
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<title>CodeSentry scan {scan_id}</title></head><body><pre>{body}</pre>"
+        "</body></html>"
+    )
+
+
+@app.get("/api/scans/{scan_id}/evidence/export")
+async def export_evidence(scan_id: int):
+    import io
+    import json
+    import zipfile
+    from pathlib import Path
+
+    from fastapi.responses import StreamingResponse
+
+    from codesentry.control.harness import list_runs
+    from codesentry.db.pool import get_conn
+    from codesentry.orchestrator.events import list_events
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT report_dir FROM scans WHERE id=%s", (int(scan_id),))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404)
+        cur.execute(
+            "SELECT id, rule_id, cwe, severity, confidence, file, line, message, engine,"
+            " verdict, path_id FROM findings WHERE scan_id=%s ORDER BY id",
+            (int(scan_id),),
+        )
+        findings = [dict(zip(
+            ["id", "rule_id", "cwe", "severity", "confidence", "file", "line",
+             "message", "engine", "verdict", "path_id"], r)) for r in cur.fetchall()]
+    report_dir = Path(str(row[0] or ""))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("findings.json", json.dumps(findings, ensure_ascii=False, indent=2))
+        z.writestr("verifications.json", json.dumps(list_runs(scan_id), ensure_ascii=False, indent=2))
+        z.writestr("events.json", json.dumps(list_events(scan_id, 0, 1000), ensure_ascii=False, indent=2))
+        for name in ("report.md", "report.sarif"):
+            p = report_dir / name
+            if p.is_file():
+                z.writestr(name, p.read_text(encoding="utf-8", errors="replace"))
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f"attachment; filename=scan-{scan_id}-evidence.zip"})
+
+
 class WebhookPayload(BaseModel):
     name: str = ""
     kind: str = "generic"
@@ -1051,6 +1229,45 @@ class CommentPayload(BaseModel):
     body: str
     finding_id: int | None = None
     author: str = ""
+
+
+@app.get("/api/scans/{scan_id}/tools")
+async def list_scan_tools(scan_id: int) -> dict:
+    from codesentry.control.tool_gateway import list_runs, list_tools
+
+    return {"scan_id": scan_id, "tools": list_tools(), "runs": list_runs(scan_id)}
+
+
+@app.post("/api/scans/{scan_id}/tools/{tool}")
+async def run_scan_tool(scan_id: int, tool: str) -> dict:
+    from codesentry.config import get_settings
+    from codesentry.control.tool_gateway import run_tool
+    from codesentry.db.pool import get_conn
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT repo_path FROM scans WHERE id=%s", (int(scan_id),))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "scan not found")
+    settings = get_settings()
+    try:
+        return await run_in_threadpool(
+            run_tool, scan_id, tool, str(row[0]),
+            allow_network=settings.tool_allow_network,
+            timeout_s=settings.tool_timeout_s,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/api/scans/{scan_id}/function")
+async def extract_scan_function(scan_id: int, path: str, line: int = 1) -> dict:
+    from codesentry.control.harness_templates import extract_function
+
+    try:
+        return await run_in_threadpool(extract_function, scan_id, path, line)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
 
 
 @app.post("/api/findings/{finding_id}/verify")

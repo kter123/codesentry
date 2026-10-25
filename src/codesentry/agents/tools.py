@@ -123,9 +123,12 @@ def build_tools(state: dict) -> dict[str, Callable]:
 
     def kb_search(query: str, top_k: int = 5) -> str:
         try:
+            from codesentry.control.knowledge_packs import search as pack_search
             from codesentry.rag.kb_ops import search
 
-            return json.dumps(search(query, top_k=int(top_k)), ensure_ascii=False)[:8000]
+            rows = list(search(query, top_k=int(top_k)))
+            rows.extend(pack_search(query, limit=int(top_k)))
+            return json.dumps(rows[: max(1, int(top_k)) * 2], ensure_ascii=False)[:8000]
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e}"
 

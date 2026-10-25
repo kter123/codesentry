@@ -29,13 +29,22 @@ ANALYSIS_TABLES = [
     "graph_builds",
     "audit_paths",
     "audit_rounds",
+    "agent_events",
+    "agent_nodes",
+    "scan_controls",
+    "verification_runs",
+    "tool_runs",
     "code_chunks",
     "kb_chunks",
+    "knowledge_packs",
     "vuln_cases",
     "scan_strategies",
+    "audit_patterns",
     "prompt_evals",
     "calibration_params",
     "llm_calls",
+    "scan_schedules",
+    "projects",
     "scans",
 ]
 
@@ -73,6 +82,12 @@ def main() -> int:
             if target.exists():
                 shutil.rmtree(target, ignore_errors=True)
                 print(f"removed {target}")
+        # work/ 下均为上传/克隆/报告临时目录；清空但保留 work 根
+        if root.exists():
+            for child in root.iterdir():
+                if child.is_dir() and child.name not in ("tools",):
+                    shutil.rmtree(child, ignore_errors=True)
+                    print(f"removed {child}")
     return 0
 
 
