@@ -470,6 +470,13 @@ SETTING_KEYS = {
     "embedding_base_url": "embedding",
     "embedding_model": "embedding",
     "embedding_api_key": "embedding",
+    "codeql_bin": "codeql",
+    "codeql_search_path": "codeql",
+    "codeql_suite": "codeql",
+    "codeql_build_mode": "codeql",
+    "codeql_build_command": "codeql",
+    "codeql_timeout_s": "codeql",
+    "codeql_db_cache": "codeql",
 }
 
 
@@ -479,7 +486,7 @@ def _mask(key: str, val: str) -> str:
 
 @app.get("/api/settings/{group}")
 async def get_settings_group(group: str) -> dict:
-    if group not in ("llm", "embedding"):
+    if group not in ("llm", "embedding", "codeql"):
         raise HTTPException(404)
     out: dict[str, str] = {}
     for key, g in SETTING_KEYS.items():
@@ -519,6 +526,13 @@ def _read_setting(key: str) -> str:
         "embedding_base_url": s.embedding_base_url,
         "embedding_model": s.embedding_model,
         "embedding_api_key": s.embedding_api_key,
+        "codeql_bin": s.codeql_bin,
+        "codeql_search_path": s.codeql_search_path,
+        "codeql_suite": s.codeql_suite,
+        "codeql_build_mode": s.codeql_build_mode,
+        "codeql_build_command": s.codeql_build_command,
+        "codeql_timeout_s": str(s.codeql_timeout_s),
+        "codeql_db_cache": str(s.codeql_db_cache).lower(),
     }.get(key, "")
 
 
@@ -528,7 +542,7 @@ class SettingsPayload(BaseModel):
 
 @app.put("/api/settings/{group}")
 async def put_settings_group(group: str, payload: SettingsPayload) -> dict:
-    if group not in ("llm", "embedding"):
+    if group not in ("llm", "embedding", "codeql"):
         raise HTTPException(404)
     for k, v in payload.values.items():
         if k not in SETTING_KEYS or SETTING_KEYS[k] != group:

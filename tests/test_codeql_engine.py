@@ -34,6 +34,29 @@ def test_run_codeql_command_construction(monkeypatch, tmp_path):
     assert analyze[-1].endswith("java-security-extended.qls")
 
 
+def test_parse_sarif_severity_and_cwe(tmp_path):
+    sarif = {
+        "runs": [{
+            "tool": {"driver": {"rules": [{"id": "java/command-line-injection",
+                                           "properties": {"cwe": "CWE-78"}}]}},
+            "results": [{
+                "ruleIndex": 0, "level": "error",
+                "message": {"text": "command injection"},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": "CmdServlet.java"},
+                    "region": {"startLine": 8},
+                }}],
+            }],
+        }],
+    }
+    path = tmp_path / "result.sarif"
+    path.write_text(__import__("json").dumps(sarif), encoding="utf-8")
+    findings = codeql._parse_sarif(path)
+    assert findings[0].severity == "high"
+    assert findings[0].cwe == 78
+    assert findings[0].rule_id == "java/command-line-injection"
+
+
 def test_run_codeql_unavailable_without_binary(monkeypatch, tmp_path):
     cfg = CodeQLConfig(binary="", search_path="", suite="s", build_mode="none",
                        build_command="", timeout_s=30, cache=True)

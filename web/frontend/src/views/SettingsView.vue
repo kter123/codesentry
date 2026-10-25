@@ -103,6 +103,73 @@
         </div>
       </el-col>
     </el-row>
+
+    <div class="panel">
+      <h2 class="panel-title">CodeQL 引擎</h2>
+      <el-alert
+        v-if="codeqlResult"
+        :type="codeqlResult.ok ? 'success' : 'error'"
+        :title="codeqlResult.text"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
+      <el-form label-position="top" :disabled="loading">
+        <el-row :gutter="14">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="Binary（留空自动探测）">
+              <el-input v-model="codeql.codeql_bin" placeholder="~/.codesentry/tools/codeql/codeql" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="Query packs 搜索路径">
+              <el-input v-model="codeql.codeql_search_path" placeholder="~/.codeql/packages" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="Suite（支持 {lang}）">
+              <el-input v-model="codeql.codeql_suite" placeholder="codeql/{lang}-queries:codeql-suites/{lang}-security-extended.qls" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-form-item label="Build mode">
+              <el-select v-model="codeql.codeql_build_mode" style="width: 100%">
+                <el-option label="none" value="none" />
+                <el-option label="autobuild" value="autobuild" />
+                <el-option label="manual" value="manual" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-form-item label="Timeout (s)">
+              <el-input-number v-model="codeql.timeout" :min="60" :max="7200" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="18">
+            <el-form-item label="Build command（仅 manual）">
+              <el-input
+                v-model="codeql.codeql_build_command"
+                :disabled="codeql.codeql_build_mode !== 'manual'"
+                placeholder="mvn -q -DskipTests package"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="6">
+            <el-form-item label="DB cache">
+              <el-switch v-model="codeql.cache" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+      <div class="toolbar" style="margin-bottom: 0">
+        <el-button type="primary" :loading="codeqlSaving" @click="saveCodeql">保存</el-button>
+        <el-button :loading="codeqlTesting" @click="testCodeql">探测</el-button>
+        <span v-if="codeqlStatus?.found" class="muted">
+          {{ codeqlStatus.version || '已安装' }} · {{ codeqlStatus.binary }}
+        </span>
+        <span v-else class="muted">未检测到 CodeQL（可填写 binary 或安装到默认目录）</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -153,6 +220,19 @@ const testResults = reactive<Record<Group, { ok: boolean; text: string } | null>
   llm: null,
   embedding: null,
 })
+const codeql = reactive({
+  codeql_bin: '',
+  codeql_search_path: '',
+  codeql_suite: '',
+  codeql_build_mode: 'none',
+  codeql_build_command: '',
+  timeout: 1800,
+  cache: true,
+})
+const codeqlSaving = ref(false)
+const codeqlTesting = ref(false)
+const codeqlResult = ref<{ ok: boolean; text: string } | null>(null)
+const codeqlStatus = ref<Record<string, unknown> | null>(null)
 
 async function loadGroup(group: Group): Promise<void> {
   errors[group] = ''
@@ -181,8 +261,74 @@ async function loadGroup(group: Group): Promise<void> {
 
 async function load(): Promise<void> {
   loading.value = true
-  await Promise.all([loadGroup('llm'), loadGroup('embedding')])
+  await Promise.all([loadGroup('llm'), loadGroup('embedding'), loadCodeql()])
   loading.value = false
+}
+
+async function loadCodeql(): Promise<void> {
+  try {
+    const [cfg, status] = await Promise.allSettled([
+      api.get<Record<string, string>>('/api/settings/codeql'),
+      api.get<Record<string, unknown>>('/api/engines/codeql/status'),
+    ])
+    if (cfg.status === 'fulfilled') {
+      Object.assign(codeql, {
+        codeql_bin: cfg.value.codeql_bin ?? '',
+        codeql_search_path: cfg.value.codeql_search_path ?? '',
+        codeql_suite: cfg.value.codeql_suite ?? '',
+        codeql_build_mode: cfg.value.codeql_build_mode || 'none',
+        codeql_build_command: cfg.value.codeql_build_command ?? '',
+        timeout: Number(cfg.value.codeql_timeout_s || 1800),
+        cache: (cfg.value.codeql_db_cache ?? 'true') !== 'false',
+      })
+    }
+    codeqlStatus.value = status.status === 'fulfilled' ? status.value : null
+  } catch {
+    codeqlStatus.value = null
+  }
+}
+
+async function saveCodeql(): Promise<void> {
+  codeqlSaving.value = true
+  codeqlResult.value = null
+  try {
+    await api.put('/api/settings/codeql', {
+      values: {
+        codeql_bin: codeql.codeql_bin,
+        codeql_search_path: codeql.codeql_search_path,
+        codeql_suite: codeql.codeql_suite,
+        codeql_build_mode: codeql.codeql_build_mode,
+        codeql_build_command: codeql.codeql_build_command,
+        codeql_timeout_s: String(codeql.timeout),
+        codeql_db_cache: codeql.cache ? 'true' : 'false',
+      },
+    })
+    ElMessage.success('CodeQL 配置已保存')
+    await loadCodeql()
+  } catch (e) {
+    codeqlResult.value = { ok: false, text: `保存失败：${errorMessage(e)}` }
+  } finally {
+    codeqlSaving.value = false
+  }
+}
+
+async function testCodeql(): Promise<void> {
+  codeqlTesting.value = true
+  codeqlResult.value = null
+  try {
+    const res = await api.post<Record<string, unknown>>('/api/engines/codeql/test')
+    codeqlStatus.value = res
+    codeqlResult.value = {
+      ok: Boolean(res.ok),
+      text: res.ok
+        ? `CodeQL ${res.version || ''}，语言：${(res.languages as string[] || []).join(', ') || '—'}`
+        : `未检测到：${String(res.error || res.binary || '')}`,
+    }
+  } catch (e) {
+    codeqlResult.value = { ok: false, text: `探测失败：${errorMessage(e)}` }
+  } finally {
+    codeqlTesting.value = false
+  }
 }
 
 function buildValues(group: Group): Record<string, string> {

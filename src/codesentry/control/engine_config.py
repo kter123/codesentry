@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,3 +95,38 @@ def resolve_codeql_config(lang: str) -> CodeQLConfig:
         build_mode=build_mode, build_command=command,
         timeout_s=max(60, timeout_s), cache=cache,
     )
+
+
+def codeql_status(lang: str = "java") -> dict:
+    cfg = resolve_codeql_config(lang)
+    binary = shutil.which(cfg.binary) if cfg.binary else None
+    version = ""
+    languages: list[str] = []
+    packs: list[str] = []
+    error = ""
+    if binary:
+        try:
+            proc = subprocess.run([binary, "version"], capture_output=True, text=True,
+                                  timeout=10, check=False)
+            if proc.returncode == 0:
+                version = (proc.stdout or proc.stderr).splitlines()[0][:160]
+            proc = subprocess.run([binary, "resolve", "languages"], capture_output=True,
+                                  text=True, timeout=10, check=False)
+            if proc.returncode == 0:
+                for line in (proc.stdout or "").splitlines():
+                    name = line.split(" (")[0].strip()
+                    if name:
+                        languages.append(name)
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)[:200]
+    try:
+        if cfg.search_path and Path(cfg.search_path).is_dir():
+            base = Path(cfg.search_path) / "codeql"
+            root = base if base.is_dir() else Path(cfg.search_path)
+            packs = sorted(p.name for p in root.iterdir() if p.is_dir())[:30]
+    except OSError:
+        pass
+    return {"found": bool(binary), "binary": binary or cfg.binary,
+            "version": version, "search_path": cfg.search_path,
+            "suite": cfg.suite, "build_mode": cfg.build_mode,
+            "languages": languages, "packs": packs, "error": error}

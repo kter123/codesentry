@@ -6,6 +6,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,9 @@ def _parse_sarif(path: Path) -> list[Finding]:
     except (OSError, json.JSONDecodeError):
         return []
     rules = {i: r.get("id", "unknown") for i, r in enumerate(doc.get("runs", [{}])[0].get("tool", {}).get("driver", {}).get("rules", []))}
+    rule_props = {i: (r.get("properties") or {}) for i, r in enumerate(
+        doc.get("runs", [{}])[0].get("tool", {}).get("driver", {}).get("rules", [])
+    )}
     out: list[Finding] = []
     for run in doc.get("runs", []):
         for res in run.get("results", []):
@@ -36,19 +40,18 @@ def _parse_sarif(path: Path) -> list[Finding]:
             region = loc.get("region", {})
             props = res.get("properties", {})
             rule_id = rules.get(res.get("ruleIndex", -1), res.get("ruleId", "unknown"))
+            severity = {"error": "high", "warning": "medium", "note": "low"}.get(
+                str(res.get("level") or "warning").lower(), "medium"
+            )
             cwe = 610
-            cwe_raw = (props.get("cwe") or res.get("rule", {}).get("properties", {}).get("cwe") if isinstance(res.get("rule"), dict) else None)
+            cwe_raw = props.get("cwe") or rule_props.get(res.get("ruleIndex", -1), {}).get("cwe")
+            if cwe_raw is None and isinstance(res.get("rule"), dict):
+                cwe_raw = res["rule"].get("properties", {}).get("cwe")
             if isinstance(cwe_raw, list):
                 cwe_raw = cwe_raw[0] if cwe_raw else None
-            try:
-                import re
-
-                m = re.search(r"CWE-(\d+)", str(cwe_raw or ""))
-                cwe = int(m.group(1)) if m else 610
-            except Exception:  # noqa: BLE001
-                _sev = {"error": "high", "warning": "medium", "note": "low"}.get(
-                    res.get("level", "warning"), "medium"
-                )
+            match = re.search(r"CWE-(\d+)", str(cwe_raw or ""))
+            if match:
+                cwe = int(match.group(1))
             line_no = int(region.get("startLine", -1))
             if line_no < 1:
                 continue
@@ -56,7 +59,7 @@ def _parse_sarif(path: Path) -> list[Finding]:
                 Finding(
                     rule_id=rule_id,
                     cwe=cwe,
-                    severity=_sev,  # type: ignore[arg-type]  # SARIF level 枚举有限
+                    severity=severity,  # type: ignore[arg-type]
                     confidence=0.7,
                     file=loc.get("artifactLocation", {}).get("uri", ""),
                     line=line_no,

@@ -192,6 +192,9 @@
                   {{ lang }}
                 </el-tag>
                 <span class="muted">{{ graph.nodes?.length ?? 0 }} 节点 / {{ graph.edges?.length ?? 0 }} 边</span>
+                <el-tag v-if="codeqlInfo" size="small" :type="codeqlInfo.ok ? 'success' : 'info'">
+                  CodeQL：{{ codeqlInfo.ok ? `${codeqlInfo.dataflow ?? 0} dataflow` : '未运行' }}
+                </el-tag>
                 <div class="grow" />
                 <el-button size="small" type="primary" @click="router.push(`/scans/${scanId}/graph`)">
                   打开图视图
@@ -495,6 +498,17 @@ const selected = ref<FindingDetail | null>(null)
 const detailLoading = ref(false)
 const sourceLines = ref<SourceLine[]>([])
 const artifacts = ref<ArtifactRow[]>([])
+
+const codeqlInfo = computed<{ ok?: boolean; dataflow?: number } | null>(() => {
+  const row = artifacts.value.find((item) => item.node === 'scan')
+  if (!row?.output_preview) return null
+  try {
+    const data = JSON.parse(row.output_preview)
+    return data?.graph_delta?.engine_graph?.codeql ?? null
+  } catch {
+    return null
+  }
+})
 const artifactVerify = ref<{ ok: boolean; count?: number; broken_at?: number } | null>(null)
 const artifactLoading = ref(false)
 const liveEvents = ref<LiveEvent[]>([])

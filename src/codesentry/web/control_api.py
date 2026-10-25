@@ -636,12 +636,19 @@ def _health_sync() -> dict:
     except Exception:  # noqa: BLE001, S110
         pass
     engines = {name: (shutil.which(name) or "") for name in ("semgrep", "codeql", "joern")}
+    engine_details: dict[str, dict] = {}
     try:
-        from codesentry.control.engine_config import resolve_codeql_config
+        from codesentry.control.engine_config import codeql_status, resolve_codeql_config
 
         cfg = resolve_codeql_config("java")
         if cfg.binary and Path(cfg.binary).is_file():
             engines["codeql"] = cfg.binary
+        detail = codeql_status("java")
+        engine_details["codeql"] = {
+            "found": detail["found"], "version": detail["version"],
+            "binary": detail["binary"], "search_path": detail["search_path"],
+            "suite": detail["suite"], "build_mode": detail["build_mode"],
+        }
     except Exception:  # noqa: BLE001, S110
         pass
     return {
@@ -649,6 +656,7 @@ def _health_sync() -> dict:
         "profiles": {"count": len(list_profiles())},
         "docker": docker_info,
         "engines": engines,
+        "engine_details": engine_details,
         "queue": queue,
     }
 
@@ -844,3 +852,18 @@ async def ops_disk() -> dict:
 @app.get("/api/health")
 async def health() -> dict:
     return await run_in_threadpool(_health_sync)
+
+
+@app.get("/api/engines/codeql/status")
+async def codeql_status() -> dict:
+    from codesentry.control.engine_config import codeql_status as _status
+
+    return await run_in_threadpool(_status, "java")
+
+
+@app.post("/api/engines/codeql/test")
+async def codeql_test() -> dict:
+    from codesentry.control.engine_config import codeql_status as _status
+
+    result = await run_in_threadpool(_status, "java")
+    return {**result, "ok": bool(result.get("found"))}

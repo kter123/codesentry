@@ -61,10 +61,10 @@
         <el-tag
           v-for="(path, name) in health.engines || {}"
           :key="name"
-          :type="path ? 'success' : 'info'"
+          :type="engineFound(name, path) ? 'success' : 'info'"
           effect="plain"
         >
-          {{ name }}：{{ path ? '已安装' : '未检测到' }}
+          {{ name }}：{{ engineLabel(name, path) }}
         </el-tag>
       </div>
       <el-empty v-else :image-size="60" description="暂无引擎信息" />
@@ -166,6 +166,7 @@ interface Health {
   profiles?: { count?: number }
   docker?: { ok?: boolean; version?: string }
   engines?: Record<string, string>
+  engine_details?: Record<string, { found?: boolean; version?: string; binary?: string }>
   queue?: { running_scans?: number }
 }
 
@@ -179,6 +180,17 @@ interface ReviewRow {
 const router = useRouter()
 const loading = ref(false)
 const health = ref<Health | null>(null)
+
+function engineFound(name: string, path: string): boolean {
+  const detail = health.value?.engine_details?.[name]
+  return Boolean(detail?.found ?? path)
+}
+
+function engineLabel(name: string, path: string): string {
+  const detail = health.value?.engine_details?.[name]
+  if (detail?.found) return `已安装 ${detail.version || ''}`.trim()
+  return path ? '已安装' : '未检测到'
+}
 const scans = ref<ScanRow[]>([])
 const reviews = ref<ReviewRow[]>([])
 const usage = ref<UsageRow[]>([])
