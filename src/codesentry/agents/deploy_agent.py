@@ -259,7 +259,7 @@ class DeploySession:
                 detach=True,
                 network=self.network,
                 ports={f"{int(port)}/tcp": ("127.0.0.1", None)},
-                environment=self.dependency_env or None,
+                environment={**self.dependency_env, "SERVER_PORT": str(int(port))},
                 mem_limit=f"{int(self.settings.deploy_mem_mb)}m",
                 nano_cpus=int(float(self.settings.deploy_cpu) * 1_000_000_000),
                 cap_drop=["ALL"],

@@ -412,8 +412,14 @@ class DockerDeployer:
                 kwargs["volumes"] = volumes
             if working_dir:
                 kwargs["working_dir"] = working_dir
-            if dependency_env:
-                kwargs["environment"] = dependency_env
+            target_env = dict(dependency_env)
+            if recipe_name in ("maven", "gradle"):
+                # Spring Boot 项目常见 server.port=80/8081/8082；统一到容器 8080，
+                # 否则宿主映射、健康检查和反向代理都会错位。
+                target_env.setdefault("SERVER_PORT", str(port))
+                target_env.setdefault("SPRING_PROFILES_ACTIVE", "dev")
+            if target_env:
+                kwargs["environment"] = target_env
             container = client.containers.run(image, **kwargs)
             self._container = container
             container.reload()

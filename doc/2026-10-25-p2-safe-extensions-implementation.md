@@ -26,6 +26,7 @@
 - 流程：目标启动前创建 bridge network；按需启动 `codesentry-dep-<scan>-<kind>`；health 通过后注入 env；目标用同一 network。
 - 镜像策略：`never` 只允许本地；`missing/always` 走 `ensure_image`；`allow_remote=false` 时不拉远程。
 - 清理：`cleanup_scan` 删除目标、依赖容器和网络。
+- Spring Boot 端口：maven/gradle 配方注入 `SERVER_PORT=8080`、`SPRING_PROFILES_ACTIVE=dev`，避免 kvf dev 配置的 80 端口与宿主映射/健康检查错位。
 
 ## JS 匿名回调验证
 
